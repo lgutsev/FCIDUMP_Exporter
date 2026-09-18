@@ -12,8 +12,9 @@ count -- rather than surfacing a raw numpy exception. Anything unanticipated is
 caught in :func:`main` and reported with its type, so a genuine bug is still
 visible but never arrives as a bare traceback.
 
-``dump`` and ``rotate`` are wired to their modules but those are M3/M4 seams, so
-they report that plainly rather than pretending.
+``dump`` writes the FCIDUMP and, when the bundle carries provenance, the sidecar
+record beside it. ``rotate`` is wired to its module but that is an M4 seam, so it
+reports that plainly rather than pretending.
 """
 
 from __future__ import annotations
@@ -250,7 +251,7 @@ def _run_validate(args) -> int:
 def _add_dump(subparsers) -> None:
     parser = subparsers.add_parser(
         "dump",
-        help="write an FCIDUMP from an .npz bundle (M3, not implemented)",
+        help="write an FCIDUMP from an .npz bundle",
         description=(
             "Fold the frozen core and write the active-space Hamiltonian as a "
             "standard FCIDUMP. The Hamiltonian gates run first, so a bundle "
@@ -272,25 +273,30 @@ def _add_dump(subparsers) -> None:
 
 
 def _run_dump(args) -> int:
-    from .write import write_fcidump
+    from .write import WriteError, provenance_path_for, write_fcidump
 
     try:
         bundle = load(args.bundle)
         hamiltonian = active_hamiltonian(bundle)
-        write_fcidump(
+        path = write_fcidump(
             hamiltonian,
             args.out,
             isym=args.isym,
             threshold=args.threshold,
             provenance=bundle.provenance,
         )
-    except (BundleError, HamiltonianError) as exc:
+    except (BundleError, HamiltonianError, WriteError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
-    except NotImplementedError as exc:
-        print(f"error: {exc}", file=sys.stderr)
-        return 2
-    print(f"wrote {args.out}")
+
+    print(f"wrote {path}")
+    print(
+        f"  {hamiltonian.nact} orbitals, {hamiltonian.nelec_active} electrons, "
+        f"MS2 {hamiltonian.ms2}\n"
+        f"  E_core {hamiltonian.e_core:.10f} Ha, E_ref {hamiltonian.e_ref:.10f} Ha "
+        f"({hamiltonian.fock_source} Fock)"
+    )
+    print(f"wrote {provenance_path_for(path)}")
     return 0
 
 

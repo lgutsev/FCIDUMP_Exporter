@@ -138,16 +138,40 @@ def test_inspect_reports_a_reader_failure_as_a_sentence(capsys, monkeypatch):
     assert "gauopen is not importable" in output
 
 
-# --------------------------------------------------------- the M3/M4 seams
+# ------------------------------------------------------------------- dump
 
-def test_dump_says_plainly_that_it_is_not_implemented(capsys, fixture_path, tmp_path):
+def test_dump_writes_a_fcidump_where_it_was_told_to(capsys, fixture_path, tmp_path):
+    target = tmp_path / "somewhere" / "FCIDUMP"
     code, output = _run(
-        capsys, "dump", str(fixture_path("ch2_rohf")),
-        "--out", str(tmp_path / "FCIDUMP"),
+        capsys, "dump", str(fixture_path("ch2_rohf")), "--out", str(target),
     )
-    assert code == 2
-    assert "M3" in output
-    assert not (tmp_path / "FCIDUMP").exists()
+    assert code == 0
+    assert str(target) in output
+    assert target.read_text().lstrip().startswith("&FCI")
+
+
+def test_dump_refuses_a_hamiltonian_it_cannot_write(capsys, fixture_path, tmp_path):
+    """A WriteError reaches the user as a sentence, not as a traceback."""
+    from dataclasses import replace
+
+    import g16dump.cli as cli
+    from g16dump.hamiltonian import active_hamiltonian
+
+    bundle = load(fixture_path("ch2_rohf"))
+    broken = replace(active_hamiltonian(bundle), ms2=3)
+
+    original = cli.active_hamiltonian
+    cli.active_hamiltonian = lambda _bundle: broken
+    try:
+        code, output = _run(
+            capsys, "dump", str(fixture_path("ch2_rohf")),
+            "--out", str(tmp_path / "FCIDUMP"),
+        )
+    finally:
+        cli.active_hamiltonian = original
+
+    assert code == 1
+    assert "opposite parity" in output
 
 
 def test_dump_still_runs_the_hamiltonian_gate_first(capsys, fixture_path, tmp_path):
