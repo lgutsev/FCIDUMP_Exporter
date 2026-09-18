@@ -10,11 +10,11 @@ a script that writes the input file for you.
 g16dump dump JOB.npz --out FCIDUMP
 ```
 
-`g16dump dump` is the M3 writer and is **not implemented on this branch yet**;
-it is being built separately. Until it lands, the files here are exercised with
-an FCIDUMP produced directly from `g16dump.hamiltonian.active_hamiltonian`, and
-`input.dat` is written against the FCIDUMP format rather than against a
-particular writer.
+That writes a strictly standard FCIDUMP, plus a `FCIDUMP.provenance.json`
+sidecar recording which job it came from, whether the Fock matrices were
+Gaussian's or rebuilt, and what the threshold discarded. The sidecar is separate
+because FCIDUMP has no comment syntax its readers agree on; Dice never sees
+it, and deleting it costs you only the provenance.
 
 Dice looks for a file named **`FCIDUMP`** in the directory it runs in. There is
 no keyword in this example that names the integral file, so `--out FCIDUMP` is
@@ -127,10 +127,14 @@ against the format rather than against the program, three ways:
 
    Same convention, same ordering, independently derived from the header.
 
-The header parser was also run against both FCIDUMPs in `legacy/`, which use a
-different header spacing from the one this project writes, and against
-truncated, non-FCIDUMP and impossible-multiplicity headers to check that each
-is refused with a message that says what is wrong.
+`make_dice_input.py` was run on the FCIDUMPs that
+`g16dump dump tests/data/ch2_rohf.npz` and `g16dump dump tests/data/h2o_rhf.npz`
+produce; the first reproduced the `input.dat` committed here, and the second
+gave the closed-shell `nocc 8` / `0 2 4 6 1 3 5 7` that six orbitals and eight
+electrons call for. The header parser was also run against both FCIDUMPs in
+`legacy/`, which use a different header spacing from the one this project
+writes, and against truncated, non-FCIDUMP and impossible-multiplicity headers
+to check that each is refused with a message that says what is wrong.
 
 What none of that establishes is that a particular build of Dice accepts this
 file and converges on it. That check needs Dice, and it is still outstanding.

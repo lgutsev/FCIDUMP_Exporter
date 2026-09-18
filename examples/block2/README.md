@@ -10,11 +10,11 @@ for you.
 g16dump dump JOB.npz --out FCIDUMP
 ```
 
-`g16dump dump` is the M3 writer and is **not implemented on this branch yet**;
-it is being built separately. Until it lands, the files here are exercised with
-an FCIDUMP produced directly from `g16dump.hamiltonian.active_hamiltonian`, and
-`dmrg.conf` is written against the FCIDUMP format rather than against a
-particular writer.
+That writes a strictly standard FCIDUMP, plus a `FCIDUMP.provenance.json`
+sidecar recording which job it came from, whether the Fock matrices were
+Gaussian's or rebuilt, and what the threshold discarded. The sidecar is separate
+because FCIDUMP has no comment syntax its readers agree on; Block2 never sees
+it, and deleting it costs you only the provenance.
 
 ## Running it
 
@@ -74,22 +74,28 @@ on the same input. That is why this example uses the default schedule.
 
 ## How this example was checked
 
-Block2 3.x (installed from PyPI) was run on an FCIDUMP built from
-`tests/data/ch2_rohf.npz`, using the `dmrg.conf` committed here:
+Block2 3.x (installed from PyPI) was run on the FCIDUMP that
+`g16dump dump tests/data/ch2_rohf.npz` produces, using the `dmrg.conf`
+committed here:
 
 | | Energy (Ha) |
 |---|---|
-| Block2, `dmrg.conf` as committed | −38.950081068017 |
+| Block2, `dmrg.conf` as committed | −38.950081068018 |
 | PySCF `fci.direct_spin1` on the same `h'` and active ERIs | −38.950081068018 |
-| reference determinant, `E_ref` | −38.868485458 |
+| reference determinant, `E_ref` | −38.868485458473 |
 
-The first two agree to 1.4e-12, and both lie below `E_ref`, as they must.
-`make_block2_input.py` was then run on that FCIDUMP and its output reproduced
-the committed `dmrg.conf`; the generated file was run through Block2 to the
-same energy. The header parser was also run against the two FCIDUMPs in
-`legacy/`, which use a different header spacing, and against truncated,
-non-FCIDUMP, impossible-multiplicity and symmetry-carrying headers to check
-that each is refused with a message that says what is wrong.
+The first two agree to 4e-13, and both lie below `E_ref`, as they must. The
+closed-shell fixture was run the same way: `g16dump dump tests/data/h2o_rhf.npz`
+gives six orbitals and eight electrons, on which Block2 finds −75.012500153955
+against −75.012500153957 from FCI, below its own `E_ref` of −74.963023138463.
+
+`make_block2_input.py` was then run on both dumps. Its output reproduced the
+committed `dmrg.conf` for CH2, and running the generated file through Block2
+gave the same energy. The header parser was also run against the two FCIDUMPs in
+`legacy/`, which use a different header spacing from the one this project
+writes, and against truncated, non-FCIDUMP, impossible-multiplicity and
+symmetry-carrying headers to check that each is refused with a message that says
+what is wrong.
 
 This checks the example, not the exporter. The scientific gates on `h'` and
 `E_core` are the oracle tests, and they are separate work.
