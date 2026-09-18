@@ -49,7 +49,6 @@ import json
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
 
 import numpy as np
 
@@ -146,12 +145,12 @@ class Bundle:
     source_program: str = "unknown"
     source_file: str = "unknown"
     fock_source: str = "none"
-    F_alpha_ao: Optional[np.ndarray] = None
-    F_beta_ao: Optional[np.ndarray] = None
-    orbital_energies: Optional[np.ndarray] = None
-    orbital_energies_beta: Optional[np.ndarray] = None
-    atom_charges: Optional[np.ndarray] = None
-    escf: Optional[float] = None
+    F_alpha_ao: np.ndarray | None = None
+    F_beta_ao: np.ndarray | None = None
+    orbital_energies: np.ndarray | None = None
+    orbital_energies_beta: np.ndarray | None = None
+    atom_charges: np.ndarray | None = None
+    escf: float | None = None
 
     provenance: dict = field(default_factory=dict)
     schema_version: int = SCHEMA_VERSION
@@ -609,7 +608,7 @@ def _check_eri_symmetry(b: Bundle, tol: float) -> list[str]:
 # --------------------------------------------------------------- provenance
 
 
-def git_commit(repo: Optional[Path] = None) -> Optional[str]:
+def git_commit(repo: Path | None = None) -> str | None:
     """The commit this bundle was produced at, or ``None`` outside a checkout."""
     root = Path(repo) if repo else Path(__file__).resolve().parent.parent
     try:
@@ -626,14 +625,14 @@ def git_commit(repo: Optional[Path] = None) -> Optional[str]:
 
 def make_provenance(
     *,
-    source_file: Optional[str] = None,
-    fch_file: Optional[str] = None,
-    route: Optional[str] = None,
-    basis: Optional[str] = None,
-    method: Optional[str] = None,
-    window_1based: Optional[tuple] = None,
+    source_file: str | None = None,
+    fch_file: str | None = None,
+    route: str | None = None,
+    basis: str | None = None,
+    method: str | None = None,
+    window_1based: tuple | None = None,
     fock_source: str = "none",
-    extra: Optional[dict] = None,
+    extra: dict | None = None,
 ) -> dict:
     """Assemble the provenance record every bundle carries.
 

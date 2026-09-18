@@ -27,7 +27,7 @@ produces a plausible, wrong Hamiltonian, so the caller states it.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional, Sequence
+from collections.abc import Sequence
 
 import numpy as np
 
@@ -70,7 +70,7 @@ class MatFileError(ValueError):
 # ------------------------------------------------------------ label lookup
 
 
-def find_label(matlist_keys: Sequence[str], candidates: Sequence[str]) -> Optional[str]:
+def find_label(matlist_keys: Sequence[str], candidates: Sequence[str]) -> str | None:
     """The first candidate present in ``matlist_keys``, or ``None``.
 
     Exact matches (case- and whitespace-insensitive) win over substring
@@ -209,7 +209,7 @@ def orient_mo_coeff(
 # --------------------------------------------------------------- the reader
 
 
-def _scalar(me, names: Sequence[str]) -> Optional[float]:
+def _scalar(me, names: Sequence[str]) -> float | None:
     if not hasattr(me, "scalar"):
         return None
     for name in names:
@@ -251,11 +251,11 @@ def extract(
     path,
     *,
     reference: str,
-    window: Optional[tuple] = None,
-    fch: Optional[str] = None,
-    route: Optional[str] = None,
-    basis: Optional[str] = None,
-    method: Optional[str] = None,
+    window: tuple | None = None,
+    fch: str | None = None,
+    route: str | None = None,
+    basis: str | None = None,
+    method: str | None = None,
 ) -> Bundle:
     """Build a bundle from the Gaussian matrix-element file at ``path``.
 
