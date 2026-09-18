@@ -1,0 +1,137 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+# A new push to a branch makes the run in flight for that branch pointless.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # Gaussian and gauopen are never available to CI, by design, and mokit is not
+  # pip-installable. Tests needing any of them must carry the matching marker.
+  NEVER_IN_CI: "not gauopen and not gaussian and not mokit"
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+
+jobs:
+  # The load-bearing job: the whole Gaussian-independent suite on every
+  # supported interpreter, in an environment that has numpy and nothing else.
+  core:
+    name: core (py${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install the package and pytest only
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install ".[test]"
+
+      - name: Check the core install is still numpy-only
+        run: python .github/scripts/check_core_deps.py
+
+      - name: Run the Gaussian-independent suite
+        run: .github/scripts/run_tests.sh "${NEVER_IN_CI} and not pyscf"
+
+  # The scientific gates. pyscf is the independent oracle the M1/M2 checks are
+  # written against, so this job installs it and runs everything the core job
+  # deselected. It stays off the full matrix because it is slow and because
+  # nothing here is interpreter-specific.
+  oracles:
+    name: oracles (py${{ matrix.python-version }}, pyscf)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install the package with the validation extra
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install ".[validate,test]"
+
+      - name: Report the oracle versions
+        run: |
+          python -c "import numpy; print('numpy', numpy.__version__)"
+          python -c "import pyscf; print('pyscf', pyscf.__version__)"
+
+      - name: Run the full suite including the pyscf oracles
+        run: .github/scripts/run_tests.sh "${NEVER_IN_CI}"
+
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install ruff
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install ".[lint]"
+
+      - name: Lint
+        run: ruff check --output-format=github .
+
+      - name: Check legacy/ is untouched
+        run: .github/scripts/check_legacy_untouched.sh
+
+  # Packaging has to keep working on its own, separately from whether the
+  # science is finished: an sdist/wheel that will not build is an M6 problem
+  # discovered far too late.
+  build:
+    name: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build the sdist and wheel
+        run: |
+          python -m pip install --upgrade pip build twine
+          python -m build
+          python -m twine check dist/*
+
+      - name: Check no Gaussian or legacy material is packaged
+        run: python .github/scripts/check_artifacts.py
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          retention-days: 14
