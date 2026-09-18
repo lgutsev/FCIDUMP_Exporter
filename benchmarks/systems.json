@@ -1,0 +1,253 @@
+{
+  "manifest_version": 1,
+  "description": "g16dump benchmark suite: mathematical validation, Ni(II) ligand-field models, metalloporphyrins across three first-row transition metals, and the legacy Fe-porphyrin regression case.",
+  "notes": [
+    "Entries with geometry_status='placeholder' still need an optimized structure. Everything else about them -- charge, multiplicity, reference, basis and active window -- is specified, and the window is validated.",
+    "Windows are 1-based inclusive MO indices, matching Gaussian's Window=(first,last).",
+    "The Gaussian route section is UNVERIFIED until a real .mat has been produced and inspected; see gaussian/README.md.",
+    "The Fe-porphine and Co-porphine entries exist so the workflow is demonstrably not Ni-specific."
+  ],
+  "systems": [
+    {
+      "name": "h2o_rhf",
+      "tier": "validation",
+      "purpose": "closed shell; a full-space dump is feasible for cross-checking",
+      "geometry": "O 0.000000 0.000000 0.117300\nH 0.000000 0.757200 -0.469200\nH 0.000000 -0.757200 -0.469200",
+      "charge": 0,
+      "multiplicity": 1,
+      "reference": "RHF",
+      "basis": "6-31G",
+      "window": [
+        2,
+        9
+      ]
+    },
+    {
+      "name": "ch2_singlet",
+      "tier": "validation",
+      "purpose": "closed-shell partner for the singlet-triplet gap",
+      "geometry": "C 0.000000 0.000000 0.000000\nH 0.869000 0.000000 0.582000\nH -0.869000 0.000000 0.582000",
+      "charge": 0,
+      "multiplicity": 1,
+      "reference": "RHF",
+      "basis": "6-31G",
+      "window": [
+        2,
+        9
+      ]
+    },
+    {
+      "name": "ch2_triplet",
+      "tier": "validation",
+      "purpose": "open-shell gate",
+      "geometry": "C 0.000000 0.000000 0.000000\nH 0.992100 0.000000 0.421600\nH -0.992100 0.000000 0.421600",
+      "charge": 0,
+      "multiplicity": 3,
+      "reference": "ROHF",
+      "basis": "6-31G",
+      "window": [
+        2,
+        9
+      ]
+    },
+    {
+      "name": "nh_triplet",
+      "tier": "validation",
+      "purpose": "second small open-shell case",
+      "geometry": "N 0.000000 0.000000 0.000000\nH 0.000000 0.000000 1.036200",
+      "charge": 0,
+      "multiplicity": 3,
+      "reference": "ROHF",
+      "basis": "6-31G",
+      "window": [
+        2,
+        8
+      ]
+    },
+    {
+      "name": "o2_triplet",
+      "tier": "validation",
+      "purpose": "degenerate SOMOs",
+      "geometry": "O 0.000000 0.000000 0.000000\nO 0.000000 0.000000 1.207500",
+      "charge": 0,
+      "multiplicity": 3,
+      "reference": "ROHF",
+      "basis": "6-31G*",
+      "window": [
+        3,
+        12
+      ]
+    },
+    {
+      "name": "n2_stretched",
+      "tier": "validation",
+      "purpose": "genuine multireference character at 2.0 A",
+      "geometry": "N 0.000000 0.000000 0.000000\nN 0.000000 0.000000 2.000000",
+      "charge": 0,
+      "multiplicity": 1,
+      "reference": "RHF",
+      "basis": "cc-pVDZ",
+      "window": [
+        3,
+        12
+      ]
+    },
+    {
+      "name": "nicl4_sqplanar_m1",
+      "tier": "ligand_field",
+      "purpose": "Ni(II) d8 NiCl4(2-), sqplanar, multiplicity 1. Square-planar ligand fields favour the singlet and tetrahedral the triplet, so the pair is a chemically meaningful ordering test.",
+      "geometry": "Ni  0.000000  0.000000  0.000000\nCl  2.250000  0.000000  0.000000\nCl -2.250000  0.000000  0.000000\nCl  0.000000  2.250000  0.000000\nCl  0.000000 -2.250000  0.000000",
+      "charge": -2,
+      "multiplicity": 1,
+      "reference": "RHF",
+      "basis": "def2-SVP",
+      "window": [
+        44,
+        57
+      ]
+    },
+    {
+      "name": "nicl4_sqplanar_m3",
+      "tier": "ligand_field",
+      "purpose": "Ni(II) d8 NiCl4(2-), sqplanar, multiplicity 3. Square-planar ligand fields favour the singlet and tetrahedral the triplet, so the pair is a chemically meaningful ordering test.",
+      "geometry": "Ni  0.000000  0.000000  0.000000\nCl  2.250000  0.000000  0.000000\nCl -2.250000  0.000000  0.000000\nCl  0.000000  2.250000  0.000000\nCl  0.000000 -2.250000  0.000000",
+      "charge": -2,
+      "multiplicity": 3,
+      "reference": "ROHF",
+      "basis": "def2-SVP",
+      "window": [
+        44,
+        57
+      ]
+    },
+    {
+      "name": "nicl4_tetrahedral_m1",
+      "tier": "ligand_field",
+      "purpose": "Ni(II) d8 NiCl4(2-), tetrahedral, multiplicity 1. Square-planar ligand fields favour the singlet and tetrahedral the triplet, so the pair is a chemically meaningful ordering test.",
+      "geometry": "Ni  0.000000  0.000000  0.000000\nCl  1.299038  1.299038  1.299038\nCl -1.299038 -1.299038  1.299038\nCl -1.299038  1.299038 -1.299038\nCl  1.299038 -1.299038 -1.299038",
+      "charge": -2,
+      "multiplicity": 1,
+      "reference": "RHF",
+      "basis": "def2-SVP",
+      "window": [
+        44,
+        57
+      ]
+    },
+    {
+      "name": "nicl4_tetrahedral_m3",
+      "tier": "ligand_field",
+      "purpose": "Ni(II) d8 NiCl4(2-), tetrahedral, multiplicity 3. Square-planar ligand fields favour the singlet and tetrahedral the triplet, so the pair is a chemically meaningful ordering test.",
+      "geometry": "Ni  0.000000  0.000000  0.000000\nCl  1.299038  1.299038  1.299038\nCl -1.299038 -1.299038  1.299038\nCl -1.299038  1.299038 -1.299038\nCl  1.299038 -1.299038 -1.299038",
+      "charge": -2,
+      "multiplicity": 3,
+      "reference": "ROHF",
+      "basis": "def2-SVP",
+      "window": [
+        44,
+        57
+      ]
+    },
+    {
+      "name": "ni_porphine_m1",
+      "tier": "porphyrin",
+      "purpose": "Ni-porphine singlet: the smallest realistic metalloporphyrin, well before any PAP substituents",
+      "geometry": "PLACEHOLDER needs an optimized geometry; composition and active space are specified: Ni-porphine, NiN4C20H12",
+      "geometry_status": "placeholder",
+      "composition": "NiN4C20H12",
+      "charge": 0,
+      "multiplicity": 1,
+      "reference": "RHF",
+      "basis": "def2-SVP",
+      "window": [
+        80,
+        109
+      ]
+    },
+    {
+      "name": "ni_porphine_m3",
+      "tier": "porphyrin",
+      "purpose": "Ni-porphine triplet; the singlet-triplet gap is the quantity of interest",
+      "geometry": "PLACEHOLDER needs an optimized geometry; composition and active space are specified: Ni-porphine, NiN4C20H12",
+      "geometry_status": "placeholder",
+      "composition": "NiN4C20H12",
+      "charge": 0,
+      "multiplicity": 3,
+      "reference": "ROHF",
+      "basis": "def2-SVP",
+      "window": [
+        80,
+        109
+      ]
+    },
+    {
+      "name": "fe_porphine_m3",
+      "tier": "porphyrin",
+      "purpose": "non-Ni first-row metal: demonstrates the workflow is not Ni-specific",
+      "geometry": "PLACEHOLDER needs an optimized geometry; composition and active space are specified: Fe-porphine, FeN4C20H12",
+      "geometry_status": "placeholder",
+      "composition": "FeN4C20H12",
+      "charge": 0,
+      "multiplicity": 3,
+      "reference": "ROHF",
+      "basis": "def2-SVP",
+      "window": [
+        79,
+        108
+      ]
+    },
+    {
+      "name": "fe_porphine_m5",
+      "tier": "porphyrin",
+      "purpose": "Fe(II) porphyrin spin-state ordering, a classic hard case",
+      "geometry": "PLACEHOLDER needs an optimized geometry; composition and active space are specified: Fe-porphine, FeN4C20H12",
+      "geometry_status": "placeholder",
+      "composition": "FeN4C20H12",
+      "charge": 0,
+      "multiplicity": 5,
+      "reference": "ROHF",
+      "basis": "def2-SVP",
+      "window": [
+        79,
+        108
+      ]
+    },
+    {
+      "name": "co_porphine_m2",
+      "tier": "porphyrin",
+      "purpose": "a second non-Ni metal, open-shell doublet",
+      "geometry": "PLACEHOLDER needs an optimized geometry; composition and active space are specified: Co-porphine, CoN4C20H12",
+      "geometry_status": "placeholder",
+      "composition": "CoN4C20H12",
+      "charge": 0,
+      "multiplicity": 2,
+      "reference": "ROHF",
+      "basis": "def2-SVP",
+      "window": [
+        79,
+        108
+      ]
+    },
+    {
+      "name": "fe_porphyrin_legacy",
+      "tier": "regression",
+      "purpose": "The legacy Fe-porphyrin case, 21 orbitals and 22 electrons. legacy/FePorph_1_Window.dat is the RHF regression target. legacy/FePorph_3_Window.dat is KNOWN WRONG and must never be used as one.",
+      "geometry": "PLACEHOLDER: the original Fe-porphyrin geometry is not in this repository",
+      "geometry_status": "placeholder",
+      "charge": 0,
+      "multiplicity": 1,
+      "reference": "RHF",
+      "basis": "ano-rcc-vtz",
+      "window": [
+        54,
+        74
+      ],
+      "legacy_reference": "legacy/FePorph_1_Window.dat",
+      "expected": {
+        "norb": 21,
+        "nelec_act": 22,
+        "ms2": 0
+      }
+    }
+  ]
+}

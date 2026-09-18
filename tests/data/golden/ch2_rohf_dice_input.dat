@@ -1,0 +1,17 @@
+nocc 6
+0 2 4 6 1 3
+end
+
+
+#variational keywords
+schedule
+0 0.0009
+3 0.0004
+end
+maxiter 12
+DoRDM
+
+#perturbative keywords
+epsilon2 1e-08
+sampleN 200
+targetError 0.0004
