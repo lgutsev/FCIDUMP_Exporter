@@ -55,6 +55,10 @@ SCALARS = {
     "escf": ["ESCF", "SCF ENERGY", "ETOTAL"],
 }
 
+#: The blocks ``extract`` cannot do without. The rest are optional: a missing
+#: Fock matrix means the rebuilt-Fock path, not a failed extraction.
+_REQUIRED_QUANTITIES = ("overlap", "hcore", "mo_coeff_alpha", "eri_active")
+
 #: ``C.T S C - I`` must come in under this for an orientation to be accepted.
 ORIENTATION_TOL = 1e-6
 
@@ -450,8 +454,115 @@ def extract(
     )
 
 
+# ----------------------------------------------------------------- survey
+
+
+def survey(path) -> dict:
+    """Report whether ``extract`` can read this ``.mat``, and if not, why.
+
+    Answers one question: are the blocks g16dump needs present, under what
+    names, and are their dimensions consistent with each other? That is the M0
+    gate in miniature, and it is what to run before an extraction.
+
+    It is deliberately narrower than ``scripts/inspect_mat.py``, which dumps
+    everything a ``.mat`` contains and assumes nothing about labels at all. Run
+    that one when this reports something missing.
+    """
+    path = Path(path)
+    me = read_matel(path)
+    keys = list(me.matlist.keys())
+
+    nao = int(_attr(me, ["nbasis"], 0) or 0)
+    nmo = int(_attr(me, ["nbsuse"], nao) or nao)
+    nfc = int(_attr(me, ["nfc"], 0) or 0)
+    nfv = int(_attr(me, ["nfv"], 0) or 0)
+
+    report = {
+        "file": str(path),
+        "header": {
+            "nao": nao,
+            "nmo": nmo,
+            "nelec": int(_attr(me, ["ne"], 0) or 0),
+            "multiplicity": int(_attr(me, ["multip", "multiplicity"], 0) or 0),
+            "nfc": nfc,
+            "nfv": nfv,
+            "window_1based": [nfc + 1, nmo - nfv],
+        },
+        "blocks": {},
+        "scalars": {},
+        "matlist_keys": sorted(keys),
+        "notes": [],
+    }
+
+    for quantity, candidates in LABELS.items():
+        label = find_label(keys, candidates)
+        entry = {"label": label, "required": quantity in _REQUIRED_QUANTITIES}
+        if label is not None:
+            try:
+                entry["elements"] = int(np.asarray(me.matlist[label].array).size)
+            except Exception:
+                entry["elements"] = None
+        report["blocks"][quantity] = entry
+
+    for name, candidates in SCALARS.items():
+        report["scalars"][name] = _scalar(me, candidates)
+
+    missing = [q for q in _REQUIRED_QUANTITIES if report["blocks"][q]["label"] is None]
+    if missing:
+        report["notes"].append(
+            f"extract cannot run: no block found for {', '.join(missing)}. If the "
+            f"file carries them under other names, add those spellings to "
+            f"g16dump.matfile.LABELS; run scripts/inspect_mat.py to see them all."
+        )
+    if report["scalars"].get("enuc") is None:
+        report["notes"].append(
+            "extract cannot run: no nuclear repulsion scalar found."
+        )
+    if report["blocks"]["fock_alpha"]["label"] is None:
+        report["notes"].append(
+            "no Fock matrix present, so the rebuilt-Fock path will be required. "
+            "That is the normal situation for Kohn-Sham orbitals."
+        )
+    elif report["blocks"]["fock_beta"]["label"] is None:
+        report["notes"].append(
+            "an alpha Fock matrix is present but no beta one. That is fine for a "
+            "closed shell and is missing information for an open shell."
+        )
+    if report["blocks"]["mo_coeff_beta"]["label"] is not None:
+        report["notes"].append(
+            "beta MO coefficients are present. If they differ from the alpha "
+            "ones this is a UHF reference, which v1 cannot represent."
+        )
+
+    eri = report["blocks"]["eri_active"]
+    if eri["label"] is not None and eri.get("elements"):
+        nact_from_eri = int(round(eri["elements"] ** 0.25))
+        if nact_from_eri**4 == eri["elements"]:
+            report["eri_nact"] = nact_from_eri
+            from_header = nmo - nfv - nfc
+            if nact_from_eri != from_header:
+                report["notes"].append(
+                    f"active ERI dimension inconsistent with the header: the "
+                    f"integrals hold {nact_from_eri} orbitals but nfc/nfv imply "
+                    f"{from_header}. Window= did not apply the way the route "
+                    f"intended; pass --window explicitly only if you know which "
+                    f"is right."
+                )
+        else:
+            report["notes"].append(
+                f"the two-electron block holds {eri['elements']} elements, which "
+                f"is not n^4 for any integer n; its packing is not one this "
+                f"reader knows."
+            )
+
+    if not report["notes"]:
+        report["notes"].append("every block extract needs is present and consistent.")
+    return report
+
+
 __all__ = [
     "LABELS",
+    "survey",
     "SCALARS",
     "MatFileError",
     "extract",

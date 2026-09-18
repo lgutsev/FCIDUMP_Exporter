@@ -86,6 +86,58 @@ def test_validate_warns_about_kohn_sham_orbitals(capsys, tmp_path, synthetic):
     assert "exchange-correlation" in output
 
 
+# ------------------------------------------------------------------ inspect
+
+def test_inspect_reports_a_readable_mat(capsys, monkeypatch, fixture_path, tmp_path):
+    """The M0 gate in miniature: can extract read this file?"""
+    import json as _json
+
+    from g16dump import matfile
+    from test_matfile import FakeMatEl
+
+    from g16dump.bundle import load as _load
+
+    matel = FakeMatEl(_load(fixture_path("h2o_rhf")))
+    monkeypatch.setattr(matfile, "read_matel", lambda path: matel)
+
+    out = tmp_path / "report.json"
+    code, output = _run(capsys, "inspect", "job.mat", "--json", str(out))
+    assert code == 0
+    assert "AA MO 2E INTEGRALS" in output
+    assert "cannot run" not in output
+    assert "7 AO, 7 MO, 10 electrons" in output
+    assert _json.loads(out.read_text())["eri_nact"] == 6
+
+
+def test_inspect_exits_nonzero_when_extract_could_not_run(
+    capsys, monkeypatch, fixture_path
+):
+    from g16dump import matfile
+    from test_matfile import FakeMatEl
+
+    from g16dump.bundle import load as _load
+
+    matel = FakeMatEl(_load(fixture_path("h2o_rhf")), drop=["OVERLAP"])
+    monkeypatch.setattr(matfile, "read_matel", lambda path: matel)
+
+    code, output = _run(capsys, "inspect", "job.mat")
+    assert code == 1
+    assert "!! overlap" in output
+    assert "cannot run" in output
+
+
+def test_inspect_reports_a_reader_failure_as_a_sentence(capsys, monkeypatch):
+    from g16dump import matfile
+
+    def _fail(path):
+        raise matfile.MatFileError("gauopen is not importable")
+
+    monkeypatch.setattr(matfile, "read_matel", _fail)
+    code, output = _run(capsys, "inspect", "job.mat")
+    assert code == 1
+    assert "gauopen is not importable" in output
+
+
 # --------------------------------------------------------- the M3/M4 seams
 
 def test_dump_says_plainly_that_it_is_not_implemented(capsys, fixture_path, tmp_path):
@@ -182,6 +234,20 @@ def test_no_subcommand_prints_help(capsys):
     assert "extract" in output and "dump" in output
 
 
+def test_an_unexpected_failure_is_not_a_bare_traceback(capsys, monkeypatch):
+    """A numpy error must still reach the user as a sentence."""
+    from g16dump import cli
+
+    def _explode(args):
+        raise np.linalg.LinAlgError("SVD did not converge")
+
+    monkeypatch.setattr(cli, "_run_validate", _explode)
+    code, output = _run(capsys, "validate", "anything.npz")
+    assert code == 3
+    assert "failed unexpectedly with LinAlgError" in output
+    assert "bug in g16dump" in output
+
+
 def test_version_is_reported(capsys):
     with pytest.raises(SystemExit) as excinfo:
         main(["--version"])
@@ -190,7 +256,7 @@ def test_version_is_reported(capsys):
 
 
 def test_every_subcommand_has_help(capsys):
-    for command in ("extract", "dump", "validate", "rotate"):
+    for command in ("inspect", "extract", "dump", "validate", "rotate"):
         with pytest.raises(SystemExit):
             main([command, "--help"])
         assert capsys.readouterr().out.strip()

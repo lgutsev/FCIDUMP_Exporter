@@ -331,3 +331,58 @@ def test_gauopen_absence_is_a_sentence_not_a_traceback(monkeypatch):
     with pytest.raises(M.MatFileError, match="PYTHONPATH"):
         M.read_matel("job.mat")
 
+
+# ---------------------------------------------------------------- the survey
+
+def test_survey_says_when_everything_is_present(fake):
+    fake()
+    report = M.survey("job.mat")
+    assert report["blocks"]["eri_active"]["label"] == "AA MO 2E INTEGRALS"
+    assert report["eri_nact"] == 6
+    assert report["header"]["window_1based"] == [2, 7]
+    assert not any("cannot run" in note for note in report["notes"])
+
+
+def test_survey_reports_a_missing_required_block_as_blocking(fake):
+    fake(drop=["AA MO 2E INTEGRALS"])
+    report = M.survey("job.mat")
+    assert report["blocks"]["eri_active"]["label"] is None
+    assert report["blocks"]["eri_active"]["required"] is True
+    assert any("cannot run" in note for note in report["notes"])
+
+
+def test_survey_treats_a_missing_fock_as_information_not_a_blocker(fake):
+    """No Fock matrix means the rebuilt-Fock path, which is normal for KS."""
+    fake(drop=["ALPHA FOCK MATRIX"])
+    report = M.survey("job.mat")
+    notes = " ".join(report["notes"])
+    assert "rebuilt-Fock path will be required" in notes
+    assert "cannot run" not in notes
+
+
+def test_survey_notices_a_missing_beta_fock(fake):
+    fake()
+    report = M.survey("job.mat")
+    assert any("no beta one" in note for note in report["notes"])
+
+
+def test_survey_cross_checks_the_window_against_the_integrals(fake):
+    fake(nfc=2)
+    report = M.survey("job.mat")
+    assert any(
+        "active ERI dimension inconsistent with the header" in note
+        for note in report["notes"]
+    )
+
+
+def test_survey_flags_beta_coefficients_as_a_possible_uhf_job(fake, h2o):
+    fake(extra={"BETA MO COEFFICIENTS": _Entry(h2o.C.T.ravel())})
+    report = M.survey("job.mat")
+    assert any("UHF reference" in note for note in report["notes"])
+
+
+def test_survey_reports_scalars_it_could_not_find(fake):
+    fake(scalars={"ENUCREP": 9.1671})
+    report = M.survey("job.mat")
+    assert report["scalars"]["enuc"] == pytest.approx(9.1671)
+    assert report["scalars"]["escf"] is None
