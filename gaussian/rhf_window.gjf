@@ -1,0 +1,13 @@
+%chk=NAME.chk
+%mem=8GB
+%nprocshared=8
+#P HF/BASIS NoSymm Int=NoBasisTransform SCF=(Conver=10)
+# Output=MatrixElement Tran=Full Window=(NFIRST,NLAST)
+
+NAME RHF windowed MO 2e integrals for FCIDUMP
+
+CHARGE 1
+GEOMETRY_HERE
+
+NAME.mat
+

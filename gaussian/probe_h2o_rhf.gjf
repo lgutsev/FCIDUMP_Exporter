@@ -1,0 +1,15 @@
+%chk=probe_h2o_rhf.chk
+%mem=2GB
+%nprocshared=1
+#P HF/STO-3G NoSymm Int=NoBasisTransform SCF=(Conver=10)
+# Output=MatrixElement Tran=Full Window=(2,7)
+
+probe_h2o_rhf: H2O RHF/STO-3G, 1 frozen core, active MOs 2-7
+
+0 1
+O   0.0000000   0.0000000   0.1173000
+H   0.0000000   0.7572000  -0.4692000
+H   0.0000000  -0.7572000  -0.4692000
+
+probe_h2o_rhf.mat
+
