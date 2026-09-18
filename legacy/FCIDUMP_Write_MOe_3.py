@@ -1,0 +1,107 @@
+#!/usr/bin/env python
+import QCOpMat as qco
+import QCMatEl as qcm
+import numpy as np
+import sys
+
+#INPUT SECTION , format of Input : python FCIDUMP_Write.py matfile active_orbitals
+fileinp = sys.argv[1]
+filemat = f'{fileinp}.mat'
+me = qcm.MatEl(file=filemat)
+#Read number of basis functions (nmo), number of MOs (nact) and the number of frozen core (nfc). 
+nmo = me.nbsuse
+nao = me.nbasis
+ncore = int(me.nfc)
+nact = nmo - ncore - me.nfv
+nelec = me.ne - me.nfc*2
+nactocc = int(ncore + nelec/2+1)
+print(f"there are {nact} active orbitals and {nelec} active electrons and a total of {nactocc} occupied orbitals and {nmo} total orbitals")
+
+#Read the integrals, resize them according to the size of the active space
+me.T = me.matlist["KINETIC ENERGY"].expand().copy()
+me.T.resize((nao,nao))
+me.V = me.matlist["CORE HAMILTONIAN ALPHA"].expand().copy()
+me.V.resize((nao,nao))
+#Read MO coefficients and transform 1-electron integrals to MO basis
+me.CMO = me.matlist["ALPHA MO COEFFICIENTS"].array.copy()
+me.CMO.resize(nmo,nao)
+h1e = np.dot(me.CMO, np.dot(me.V, np.transpose(me.CMO)))
+#Read 2-electron integrals in MO basis
+h2e_aa=me.matlist["AA MO 2E INTEGRALS"].expand().copy()
+h2e_aa.resize(nact,nact,nact,nact)
+h2e_ba=me.matlist["BA MO 2E INTEGRALS"].expand().copy()
+h2e_ba.resize(nact,nact,nact,nact)
+h2e_bb=me.matlist["BB MO 2E INTEGRALS"].expand().copy()
+h2e_bb.resize(nact,nact,nact,nact)
+#Read nuclear repulsion energy, number of electrons and spin
+enuc = me.scalar('ENUCREP')
+ms2= me.multip-1
+#Read the molecular orbital energies for the next part
+me.MOE=me.matlist["ALPHA ORBITAL ENERGIES"].expand().copy()
+me.MOEd = np.diag(me.MOE)
+
+#Manipulations to Reduce the Hamiltonian Space to the Active Space
+nact_2e = nactocc - ncore
+nact_2e_B = nact_2e - 2
+iact = ncore + nact
+h1e_act = me.MOEd[ncore:iact,ncore:iact].copy()
+print(f"the shape of Vmod is {h1e_act.shape},there are {nact_2e} active occupied orbitals")
+J_act_AA = np.einsum('acbb->ac', h2e_aa[:nact, :nact, :nact_2e, :nact_2e])
+K_act_AA = np.einsum('abbc->ac', h2e_aa[:nact, :nact_2e, :nact_2e, :nact])
+J_act_BA = np.einsum('acbb->ac', h2e_ba[:nact, :nact, :nact_2e_B, :nact_2e_B])
+
+h1e_act = h1e_act - J_act_AA + K_act_AA - J_act_BA
+
+#For the next term we require the h1e_b that includes BB
+h1e_act_b = me.MOEd[ncore:iact,ncore:iact].copy()
+J_act_BB = np.einsum('acbb->ac', h2e_bb[:nact, :nact, :nact_2e_B, :nact_2e_B])
+K_act_BB = np.einsum('abbc->ac', h2e_bb[:nact, :nact_2e_B, :nact_2e_B, :nact])
+J_act_b_BA = np.einsum('acbb->ac', h2e_ba[:nact, :nact, :nact_2e, :nact_2e])
+
+h1e_act_b = h1e_act_b - J_act_BB + K_act_BB - J_act_b_BA
+h1e_act_T=1/2*(h1e_act+h1e_act_b)
+
+#NuclearRepulsion Term
+enuc +=  1/2*np.trace(h1e[:nactocc, :nactocc])
+enuc +=  1/2*np.trace(h1e[:nactocc-2, :nactocc-2])
+print(f"The nuclear repulsion is {enuc}")
+enuc += np.trace(me.MOEd[:ncore,:ncore])
+print(f"The nuclear repulsion is {enuc}")
+enuc -=   1/2*np.trace(h1e_act[:nact_2e, :nact_2e])
+enuc -=  1/2*np.trace(h1e_act_b[:nact_2e_B, :nact_2e_B])
+#enuc -= 1/2*np.trace(h1e_act_T[:nact_2e, :nact_2e])
+#enuc -= 1/2*np.trace(h1e_act_T[:nact_2e_B, :nact_2e_B])
+#print(f"the A trace is {np.trace(h1e_act[:nact_2e, :nact_2e])} the B trace is {np.trace(h1e_act_b[:nact_2e_B, :nact_2e_B])}")
+print(f"The nuclear repulsion is {enuc}")
+
+# Write FCIDUMP file
+f = open(f'/work/lgutsev/DICE/{fileinp}.dat','w+')
+f.write(f'&FCI NORB = {nact}, NELEC={nelec} , MS2={ms2}, \n')
+f.write(' ORBSYM=')
+for i in range(nact):
+  f.write('1,')
+f.write('\n')
+f.write(' ISYM=1, \n')
+f.write('&END \n')
+# Write 2-electron integrals
+for i in range(nact):
+ for j in range(0,i+1):
+   for k in range(0,i+1):
+    if i == k:
+      last = j+1
+    else:
+      last = k + 1
+    for l in range(0,last):
+      value = h2e_aa[i, j, k, l]
+      f.write(f'{value:24.16E} {i+1:4d} {j+1:4d} {k+1:4d} {l+1:4d} \n')
+# Write 1-electron integrals
+for i in range(nact):
+ for j in range(0,i+1):
+  f.write(f'{h1e_act[i,j]:24.16E}')
+  f.write(f' {i+1:4d} {j+1:4d} 0 0 \n')
+# Write nuclear repulsion
+f.write(f'{enuc:24.16E} 0 0 0 0\n')
+f.close()
+
+
+

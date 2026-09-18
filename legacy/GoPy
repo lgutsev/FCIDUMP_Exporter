@@ -1,0 +1,7 @@
+#!/bin/bash
+Job_Name=$1
+Run_Name='r'$Job_Name
+cp rPyTemplate $Run_Name
+sed -i "s/Template/$Job_Name/g" $Run_Name
+qsub $Run_Name
+
