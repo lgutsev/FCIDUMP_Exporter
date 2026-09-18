@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "g16dump"
+version = "0.0.1.dev0"
+description = "FCIDUMP files for SHCI/DMRG from Gaussian 16 windowed MO integrals, with correct open-shell algebra"
+readme = "README.md"
+requires-python = ">=3.9"
+# The core path is numpy only, by design. pyscf/mokit are validation-only and
+# are imported lazily by the rebuilt-Fock fallback; see README.
+dependencies = ["numpy>=1.20"]
+
+[project.optional-dependencies]
+# Oracles for the M1/M2 gates, and the rebuilt-Fock path for KS orbitals.
+validate = ["pyscf>=2.0", "mokit"]
+test = ["pytest>=7"]
+
+[project.scripts]
+g16dump = "g16dump.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["g16dump*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
