@@ -7,11 +7,12 @@ spectrum, and identical PySCF FCI ground-state energies before and after).
 
 What the implementation owes, recorded here so it is not rediscovered:
 
-* ``h' -> U.T h' U`` and the matching four-index transform of the active ERIs.
-* ``mo_coeff[:, active] -> mo_coeff[:, active] @ U``, so that the rotated
+* ``h' -> U.T h' U`` and the matching four-index transform of ``eri_active``.
+* ``C[:, bundle.active] -> C[:, bundle.active] @ U``, so that the rotated
   bundle stays self-consistent and can be rotated again.
 * ``U`` verified orthogonal to numerical tolerance before anything is
-  transformed, since a non-orthogonal ``U`` silently changes the spectrum.
+  transformed, and rejected otherwise, since a non-orthogonal ``U`` silently
+  changes the spectrum.
 * ``E_core``, ``E_ref`` and the electron counts are invariant; a rotation that
   changes them is a bug and should be caught rather than written out.
 * The rotation recorded in the bundle's provenance, because orbital
@@ -31,8 +32,8 @@ def rotate_active_space(bundle: Bundle, rotation, *, tol: float = 1e-10) -> Bund
     """
     raise NotImplementedError(
         "active-space rotation is M4 and is not implemented yet. The bundle "
-        "schema already stores everything it needs: mo_coeff, the AO-basis Fock "
-        "matrices and the active ERIs."
+        "schema already stores everything it needs: C, the AO-basis Fock "
+        "matrices, and eri_active."
     )
 
 

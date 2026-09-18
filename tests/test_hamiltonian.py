@@ -43,8 +43,8 @@ def test_reference_energy_reproduces_the_scf_energy(bundles, name):
     """The one check that comes from outside this code base entirely."""
     bundle = bundles(name)
     result = H.active_hamiltonian(bundle)
-    assert bundle.e_scf is not None
-    assert result.e_ref == pytest.approx(bundle.e_scf, abs=1e-9)
+    assert bundle.escf is not None
+    assert result.e_ref == pytest.approx(bundle.escf, abs=1e-9)
 
 
 @pytest.mark.parametrize("name", SOUND)
@@ -92,10 +92,10 @@ def _h_from_diagonal_fock_only(bundle):
     return H.effective_one_electron(
         diagonal_only[0],
         diagonal_only[1],
-        bundle.eri_act,
+        bundle.eri_active,
         bundle.active,
-        bundle.nocc_act_alpha,
-        bundle.nocc_act_beta,
+        bundle.nocc_active_alpha,
+        bundle.nocc_active_beta,
     )[0]
 
 
@@ -123,7 +123,7 @@ def test_rotated_rohf_is_where_the_legacy_assumption_fails(bundles):
 def test_the_rotated_fixture_really_has_a_nondiagonal_fock(bundles):
     """Guard the guard: a fixture that quietly stayed canonical proves nothing."""
     bundle = bundles("ch2_rohf_rotated")
-    fock = H.to_mo(bundle.fock_ao_alpha, bundle.mo_coeff)[bundle.active, bundle.active]
+    fock = H.to_mo(bundle.F_alpha_ao, bundle.C)[bundle.active, bundle.active]
     off_diagonal = float(np.max(np.abs(fock - np.diag(np.diag(fock)))))
     assert off_diagonal > 1e-2
 
@@ -155,10 +155,10 @@ def test_a_disagreeing_pair_is_never_averaged(bundles):
     result = H.active_hamiltonian(bundle, spin_tol=10.0)
     from_alpha, from_beta = H.effective_one_electron(
         *H.mo_fock_matrices(bundle),
-        bundle.eri_act,
+        bundle.eri_active,
         bundle.active,
-        bundle.nocc_act_alpha,
-        bundle.nocc_act_beta,
+        bundle.nocc_active_alpha,
+        bundle.nocc_active_beta,
     )
     np.testing.assert_allclose(result.h_eff, from_alpha, atol=0)
     assert not np.allclose(result.h_eff, 0.5 * (from_alpha + from_beta))
@@ -167,7 +167,7 @@ def test_a_disagreeing_pair_is_never_averaged(bundles):
 # ------------------------------------------------------ missing information
 
 def test_open_shell_without_a_beta_fock_is_refused(bundles):
-    bundle = replace(bundles("ch2_rohf"), fock_ao_beta=None)
+    bundle = replace(bundles("ch2_rohf"), F_beta_ao=None)
     with pytest.raises(H.HamiltonianError, match="no beta Fock matrix"):
         H.active_hamiltonian(bundle)
 
@@ -175,14 +175,14 @@ def test_open_shell_without_a_beta_fock_is_refused(bundles):
 def test_closed_shell_without_a_beta_fock_is_fine(bundles):
     """For a closed shell the two are the same matrix; h2o_rhf stores only one."""
     bundle = bundles("h2o_rhf")
-    assert bundle.fock_ao_beta is None
+    assert bundle.F_beta_ao is None
     result = H.active_hamiltonian(bundle)
     assert result.spin_deviation == pytest.approx(0.0, abs=1e-12)
 
 
 def test_no_fock_at_all_names_the_way_out(bundles):
     bundle = replace(
-        bundles("h2o_rhf"), fock_ao_alpha=None, fock_ao_beta=None,
+        bundles("h2o_rhf"), F_alpha_ao=None, F_beta_ao=None,
         fock_source="none",
     )
     with pytest.raises(H.HamiltonianError, match="rebuild_fock"):
@@ -194,7 +194,7 @@ def test_no_fock_at_all_names_the_way_out(bundles):
 def test_ks_orbitals_may_not_use_a_stored_fock(bundles):
     """The KS matrix carries exchange-correlation; it is not the HF Hamiltonian."""
     bundle = replace(
-        bundles("h2o_rhf"), reference="RKS", fock_source="none",
+        bundles("h2o_rhf"), reference_type="RKS", fock_source="none",
     )
     with pytest.raises(H.HamiltonianError, match="exchange-correlation"):
         H.active_hamiltonian(bundle)
@@ -203,7 +203,7 @@ def test_ks_orbitals_may_not_use_a_stored_fock(bundles):
 def test_ks_orbitals_with_a_rebuilt_fock_are_accepted(bundles):
     """Relabelled only: the point is that the gate opens on fock_source alone."""
     bundle = replace(
-        bundles("h2o_rhf"), reference="RKS", fock_source="pyscf_rebuilt",
+        bundles("h2o_rhf"), reference_type="RKS", fock_source="pyscf_rebuilt",
     )
     assert H.active_hamiltonian(bundle).fock_source == "pyscf_rebuilt"
 
@@ -235,15 +235,15 @@ def test_against_a_full_ao_to_mo_transform(bundles):
     for name, spec in cases:
         bundle = bundles(name)
         mol = gto.M(**spec)
-        assert mol.energy_nuc() == pytest.approx(bundle.e_nuc, abs=1e-9)
+        assert mol.energy_nuc() == pytest.approx(bundle.enuc, abs=1e-9)
 
-        mo = bundle.mo_coeff
-        hcore_mo = H.to_mo(bundle.hcore_ao, mo)
+        mo = bundle.C
+        hcore_mo = H.to_mo(bundle.Hcore_ao, mo)
         eri = ao2mo.restore(1, ao2mo.full(mol, mo), bundle.nmo)
 
         active = bundle.active
         h_oracle = hcore_mo[active, active].copy()
-        e_core_oracle = bundle.e_nuc
+        e_core_oracle = bundle.enuc
         for i in range(bundle.ncore):
             h_oracle += 2.0 * eri[active, active, i, i] - eri[active, i, i, active]
             e_core_oracle += 2.0 * hcore_mo[i, i]
@@ -276,21 +276,21 @@ def test_with_rebuilt_fock_records_its_own_provenance(bundles):
     from make_fixtures import H2O
 
     bundle = replace(
-        bundles("h2o_rhf"), fock_ao_alpha=None, fock_ao_beta=None,
+        bundles("h2o_rhf"), F_alpha_ao=None, F_beta_ao=None,
         fock_source="none",
     )
     rebuilt = H.with_rebuilt_fock(bundle, gto.M(atom=H2O, basis="sto-3g", verbose=0))
     assert rebuilt.fock_source == "pyscf_rebuilt"
     assert rebuilt.provenance["fock_source"] == "pyscf_rebuilt"
     assert H.active_hamiltonian(rebuilt).e_ref == pytest.approx(
-        bundle.e_scf, abs=1e-9
+        bundle.escf, abs=1e-9
     )
 
 
 def test_densities_are_idempotent_against_the_overlap(bundles):
     """``P S P = P``: the density is a projector onto the occupied space."""
     bundle = bundles("ch2_rohf")
-    dm_a, dm_b = H.densities(bundle.mo_coeff, bundle.nalpha, bundle.nbeta)
+    dm_a, dm_b = H.densities(bundle.C, bundle.nalpha, bundle.nbeta)
     for dm, nocc in ((dm_a, bundle.nalpha), (dm_b, bundle.nbeta)):
-        np.testing.assert_allclose(dm @ bundle.overlap @ dm, dm, atol=1e-10)
-        assert np.trace(dm @ bundle.overlap) == pytest.approx(nocc, abs=1e-10)
+        np.testing.assert_allclose(dm @ bundle.S @ dm, dm, atol=1e-10)
+        assert np.trace(dm @ bundle.S) == pytest.approx(nocc, abs=1e-10)

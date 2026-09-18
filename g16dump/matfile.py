@@ -43,16 +43,16 @@ LABELS = {
     "mo_coeff_beta": ["BETA MO COEFFICIENTS", "BETA ORBITAL COEFFICIENTS"],
     "fock_alpha": ["ALPHA FOCK MATRIX", "ALPHA FOCK"],
     "fock_beta": ["BETA FOCK MATRIX", "BETA FOCK"],
-    "mo_energy_alpha": ["ALPHA ORBITAL ENERGIES"],
-    "mo_energy_beta": ["BETA ORBITAL ENERGIES"],
-    "eri_act": ["AA MO 2E INTEGRALS", "ALPHA-ALPHA MO 2E INTEGRALS"],
+    "orbital_energies": ["ALPHA ORBITAL ENERGIES"],
+    "orbital_energies_beta": ["BETA ORBITAL ENERGIES"],
+    "eri_active": ["AA MO 2E INTEGRALS", "ALPHA-ALPHA MO 2E INTEGRALS"],
 }
 
 #: Scalar names to try, in order, for each energy. A miss is expected; only an
 #: all-miss is a problem, and only for the nuclear repulsion.
 SCALARS = {
-    "e_nuc": ["ENUCREP"],
-    "e_scf": ["ESCF", "SCF ENERGY", "ETOTAL"],
+    "enuc": ["ENUCREP"],
+    "escf": ["ESCF", "SCF ENERGY", "ETOTAL"],
 }
 
 #: ``C.T S C - I`` must come in under this for an orientation to be accepted.
@@ -192,8 +192,8 @@ def orient_mo_coeff(
             f"    {k}: max |C.T S C - I| = {v:.3e}" for k, v in scores.items()
         )
         raise MatFileError(
-            f"the MO coefficients are not orthonormal against the overlap in "
-            f"any orientation:\n{detail}\n"
+            f"MO coefficients are not orthonormal in the supplied AO overlap, "
+            f"in either orientation:\n{detail}\n"
             f"  tolerance: {tol:.1e}\n"
             f"Either the overlap and the coefficients come from different AO "
             f"sets (check Int=NoBasisTransform in the route), or the block read "
@@ -321,7 +321,7 @@ def extract(
             )
 
     # ------------------------------------------------------ active window
-    eri_label = _require_label(keys, "eri_act", path)
+    eri_label = _require_label(keys, "eri_active", path)
     eri_flat = _expand(me.matlist[eri_label], eri_label, path)
     nact_from_eri = int(round(eri_flat.size ** 0.25))
     if nact_from_eri**4 != eri_flat.size:
@@ -331,25 +331,26 @@ def extract(
             f"this reader does not know; run scripts/inspect_mat.py and read its "
             f"packing candidates."
         )
-    eri_act = np.ascontiguousarray(eri_flat.reshape((nact_from_eri,) * 4))
+    eri_active = np.ascontiguousarray(eri_flat.reshape((nact_from_eri,) * 4))
 
+    # The window is stored exactly as the Gaussian route stated it: 1-based and
+    # inclusive, so that a bundle records the job that was actually asked for.
     if window is not None:
-        first, last = int(window[0]), int(window[1])
-        act_start, act_stop = first - 1, last
+        active_first, active_last = int(window[0]), int(window[1])
     else:
         nfc = int(_attr(me, ["nfc"], 0) or 0)
         nfv = int(_attr(me, ["nfv"], 0) or 0)
-        act_start, act_stop = nfc, nmo - nfv
+        active_first, active_last = nfc + 1, nmo - nfv
 
-    nact = act_stop - act_start
+    nact = active_last - active_first + 1
     if nact != nact_from_eri:
         source = "the --window given" if window else "the file's nfc/nfv"
         raise MatFileError(
-            f"{path}: {source} implies {nact} active orbitals (MOs "
-            f"{act_start + 1}-{act_stop} of {nmo}), but {eri_label} holds "
-            f"{nact_from_eri}^4 integrals, i.e. {nact_from_eri} orbitals. The "
-            f"Window= keyword did not apply the way the route intended. Do not "
-            f"work around this; fix the route."
+            f"{path}: active ERI dimension inconsistent with nact. {source} "
+            f"implies {nact} active orbitals (MOs {active_first}-{active_last} "
+            f"of {nmo}), but {eri_label} holds {nact_from_eri}^4 integrals, i.e. "
+            f"{nact_from_eri} orbitals. The Window= keyword did not apply the "
+            f"way the route intended. Do not work around this; fix the route."
         )
 
     # --------------------------------------------------------- Fock matrices
@@ -390,10 +391,10 @@ def extract(
         ).ravel()
         return values[:nmo] if values.size >= nmo else None
 
-    e_nuc = _scalar(me, SCALARS["e_nuc"])
-    if e_nuc is None:
+    enuc = _scalar(me, SCALARS["enuc"])
+    if enuc is None:
         raise MatFileError(
-            f"{path}: no nuclear repulsion energy (tried {SCALARS['e_nuc']}). "
+            f"{path}: no nuclear repulsion energy (tried {SCALARS['enuc']}). "
             f"Run scripts/inspect_mat.py to see which scalar names this file "
             f"carries."
         )
@@ -411,13 +412,13 @@ def extract(
         route=route,
         basis=basis,
         method=method,
-        window_1based=(act_start + 1, act_stop),
+        window_1based=(active_first, active_last),
         fock_source=fock_source,
         extra={"ks_note": ks_note} if ks_note else None,
     )
 
     return Bundle(
-        reference=reference,
+        reference_type=reference,
         charge=charge,
         multiplicity=multiplicity,
         nelec=nelec,
@@ -425,24 +426,26 @@ def extract(
         nbeta=nbeta,
         nao=nao,
         nmo=nmo,
-        ncore=act_start,
+        ncore=active_first - 1,
         nact=nact,
-        act_start=act_start,
-        act_stop=act_stop,
-        e_nuc=e_nuc,
-        mo_coeff=mo_coeff,
-        overlap=overlap,
-        hcore_ao=hcore,
-        eri_act=eri_act,
+        active_first=active_first,
+        active_last=active_last,
+        enuc=enuc,
+        C=mo_coeff,
+        S=overlap,
+        Hcore_ao=hcore,
+        eri_active=eri_active,
+        source_program="gaussian16",
+        source_file=str(path),
         fock_source=fock_source,
-        fock_ao_alpha=fock_alpha,
-        fock_ao_beta=fock_beta,
-        mo_energy_alpha=_orbital_energies("mo_energy_alpha"),
-        mo_energy_beta=_orbital_energies("mo_energy_beta"),
+        F_alpha_ao=fock_alpha,
+        F_beta_ao=fock_beta,
+        orbital_energies=_orbital_energies("orbital_energies"),
+        orbital_energies_beta=_orbital_energies("orbital_energies_beta"),
         atom_charges=(
             atom_charges if atom_charges is not None and atom_charges.size else None
         ),
-        e_scf=_scalar(me, SCALARS["e_scf"]),
+        escf=_scalar(me, SCALARS["escf"]),
         provenance=provenance,
     )
 

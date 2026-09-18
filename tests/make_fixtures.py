@@ -69,8 +69,13 @@ def _windowed_eri(mol, mo, act_start, act_stop):
 
 def _bundle(mol, mf, mo, nalpha, nbeta, act_start, act_stop, reference,
             fock_alpha, fock_beta, fock_source, note):
+    """``act_start``/``act_stop`` are 0-based and half-open, as slices are.
+
+    The bundle stores the window the way the Gaussian route states it, 1-based
+    and inclusive, so they are converted once, here.
+    """
     return Bundle(
-        reference=reference,
+        reference_type=reference,
         charge=int(mol.charge),
         multiplicity=int(mol.spin) + 1,
         nelec=nalpha + nbeta,
@@ -80,21 +85,24 @@ def _bundle(mol, mf, mo, nalpha, nbeta, act_start, act_stop, reference,
         nmo=mo.shape[1],
         ncore=act_start,
         nact=act_stop - act_start,
-        act_start=act_start,
-        act_stop=act_stop,
-        e_nuc=float(mol.energy_nuc()),
-        mo_coeff=np.asarray(mo),
-        overlap=np.asarray(mf.get_ovlp()),
-        hcore_ao=np.asarray(mf.get_hcore()),
-        eri_act=_windowed_eri(mol, mo, act_start, act_stop),
+        active_first=act_start + 1,
+        active_last=act_stop,
+        enuc=float(mol.energy_nuc()),
+        C=np.asarray(mo),
+        S=np.asarray(mf.get_ovlp()),
+        Hcore_ao=np.asarray(mf.get_hcore()),
+        eri_active=_windowed_eri(mol, mo, act_start, act_stop),
+        # PySCF stands in for Gaussian here; saying so is the honest record.
+        source_program="pyscf",
+        source_file="tests/make_fixtures.py",
         fock_source=fock_source,
-        fock_ao_alpha=fock_alpha,
-        fock_ao_beta=fock_beta,
-        mo_energy_alpha=np.asarray(mf.mo_energy, dtype=float).ravel()[: mo.shape[1]]
+        F_alpha_ao=fock_alpha,
+        F_beta_ao=fock_beta,
+        orbital_energies=np.asarray(mf.mo_energy, dtype=float).ravel()[: mo.shape[1]]
         if np.asarray(mf.mo_energy).ndim == 1
         else None,
         atom_charges=mol.atom_charges().astype(float),
-        e_scf=float(mf.e_tot),
+        escf=float(mf.e_tot),
         provenance=make_provenance(
             basis=mol.basis if isinstance(mol.basis, str) else None,
             method=reference,
@@ -175,7 +183,7 @@ def main() -> int:
         "matrix is not diagonal")
     # The orbital energies no longer describe these orbitals. Dropping them is
     # the honest thing: they are diagnostics, and here they diagnose nothing.
-    rotated.mo_energy_alpha = None
+    rotated.orbital_energies = None
     written.append(save(rotated, DATA / "ch2_rohf_rotated.npz"))
 
     for path in written:

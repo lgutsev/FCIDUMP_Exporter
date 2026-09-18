@@ -9,6 +9,8 @@ determinant energy evaluated from the file reproduces the SCF energy).
 What the implementation owes, recorded here so it is not rediscovered:
 
 * ``NORB``, ``NELEC``, ``MS2``, ``ORBSYM``, ``ISYM`` in the namelist header.
+  The first three are on the Hamiltonian as ``nact``, ``nelec_active``
+  and ``ms2``.
 * Symmetry-unique two-electron entries only: for real orbitals the 8-fold
   permutational symmetry means writing ``t >= u``, ``v >= w``, ``(tu) >= (vw)``.
 * An optional magnitude threshold below which an integral is omitted.

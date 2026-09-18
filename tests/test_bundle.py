@@ -35,14 +35,15 @@ def test_round_trip_preserves_everything(synthetic, tmp_path):
     path = B.save(synthetic, tmp_path / "round.npz")
     restored = B.load(path)
 
-    for name in ("reference", "charge", "multiplicity", "nelec", "nalpha",
-                 "nbeta", "nao", "nmo", "ncore", "nact", "act_start",
-                 "act_stop", "fock_source", "schema_version"):
+    for name in ("reference_type", "charge", "multiplicity", "nelec", "nalpha",
+                 "nbeta", "nao", "nmo", "ncore", "nact", "active_first",
+                 "active_last", "source_program", "source_file", "fock_source",
+                 "schema_version"):
         assert getattr(restored, name) == getattr(synthetic, name), name
-    assert restored.e_nuc == pytest.approx(synthetic.e_nuc)
-    assert restored.e_scf == pytest.approx(synthetic.e_scf)
-    for name in ("mo_coeff", "overlap", "hcore_ao", "eri_act", "fock_ao_alpha",
-                 "fock_ao_beta", "mo_energy_alpha", "atom_charges"):
+    assert restored.enuc == pytest.approx(synthetic.enuc)
+    assert restored.escf == pytest.approx(synthetic.escf)
+    for name in ("C", "S", "Hcore_ao", "eri_active", "F_alpha_ao",
+                 "F_beta_ao", "orbital_energies", "atom_charges"):
         np.testing.assert_allclose(
             getattr(restored, name), getattr(synthetic, name), atol=0, rtol=0
         )
@@ -56,19 +57,25 @@ def test_absent_optionals_stay_absent(synthetic, tmp_path):
     from dataclasses import replace
 
     bundle = replace(
-        synthetic, e_scf=None, mo_energy_alpha=None, atom_charges=None
+        synthetic, escf=None, orbital_energies=None, atom_charges=None
     )
     restored = B.load(B.save(bundle, tmp_path / "sparse.npz"))
-    assert restored.e_scf is None
-    assert restored.mo_energy_alpha is None
+    assert restored.escf is None
+    assert restored.orbital_energies is None
     assert restored.atom_charges is None
 
 
 def test_derived_views(synthetic):
+    """The accessors other threads use instead of touching raw keys."""
     assert synthetic.active == slice(1, 5)
-    assert synthetic.nocc_act_alpha == 2
-    assert synthetic.nocc_act_beta == 2
+    assert synthetic.core == slice(0, 1)
+    assert synthetic.nocc_active_alpha == 2
+    assert synthetic.nocc_active_beta == 2
+    assert synthetic.nelec_active == 4
+    assert synthetic.ms2 == 0
+    assert synthetic.nfrozen_virtual == 1
     assert synthetic.is_ks is False
+    assert synthetic.has_fock is True
     assert "active window MOs 2-5" in synthetic.describe()
 
 
@@ -87,7 +94,7 @@ def test_provenance_records_commit_and_schema():
 def test_transposed_coefficients_are_named_not_just_rejected(broken):
     """The single most likely reader bug gets a message that says what to do."""
     good = broken()
-    bundle = broken(mo_coeff=np.ascontiguousarray(good.mo_coeff.T))
+    bundle = broken(C=np.ascontiguousarray(good.C.T))
     with pytest.raises(B.BundleError) as excinfo:
         B.validate(bundle)
     message = _message(excinfo)
@@ -97,16 +104,16 @@ def test_transposed_coefficients_are_named_not_just_rejected(broken):
 
 def test_non_orthonormal_coefficients_are_rejected(broken):
     good = broken()
-    scrambled = good.mo_coeff.copy()
+    scrambled = good.C.copy()
     scrambled[:, 2] *= 1.5
     with pytest.raises(B.BundleError, match="not orthonormal"):
-        B.validate(broken(mo_coeff=scrambled))
+        B.validate(broken(C=scrambled))
 
 
 # ---------------------------------------------------- one-electron matrices
 
-@pytest.mark.parametrize("name", ["overlap", "hcore_ao", "fock_ao_alpha",
-                                  "fock_ao_beta"])
+@pytest.mark.parametrize("name", ["S", "Hcore_ao", "F_alpha_ao",
+                                  "F_beta_ao"])
 def test_non_hermitian_one_electron_matrices_are_rejected(broken, name):
     good = broken()
     matrix = np.array(getattr(good, name), copy=True)
@@ -117,20 +124,20 @@ def test_non_hermitian_one_electron_matrices_are_rejected(broken, name):
 
 def test_overlap_must_be_positive_definite(broken):
     good = broken()
-    overlap = np.array(good.overlap, copy=True)
+    overlap = np.array(good.S, copy=True)
     overlap[0, 0] = -overlap[0, 0]
     with pytest.raises(B.BundleError) as excinfo:
-        B.validate(broken(overlap=overlap))
+        B.validate(broken(S=overlap))
     message = _message(excinfo)
     assert "positive definite" in message or "orthonormal" in message
 
 
 def test_non_finite_values_are_rejected(broken):
     good = broken()
-    hcore = np.array(good.hcore_ao, copy=True)
+    hcore = np.array(good.Hcore_ao, copy=True)
     hcore[2, 2] = np.nan
     with pytest.raises(B.BundleError, match="non-finite"):
-        B.validate(broken(hcore_ao=hcore))
+        B.validate(broken(Hcore_ao=hcore))
 
 
 # --------------------------------------------------------- ERI symmetry
@@ -145,21 +152,21 @@ def test_non_finite_values_are_rejected(broken):
 def test_corrupted_eri_symmetry_is_caught(broken, index, expected):
     """A corrupted permutation is silent in every energy until it is not."""
     good = broken()
-    eri = np.array(good.eri_act, copy=True)
+    eri = np.array(good.eri_active, copy=True)
     eri[index] += 0.25
     with pytest.raises(B.BundleError, match=expected):
-        B.validate(broken(eri_act=eri))
+        B.validate(broken(eri_active=eri))
 
 
 def test_pair_exchange_asymmetry_is_caught(broken):
     good = broken()
-    eri = np.array(good.eri_act, copy=True)
+    eri = np.array(good.eri_active, copy=True)
     eri[0, 1, 2, 3] += 0.25
     eri[1, 0, 2, 3] += 0.25
     eri[0, 1, 3, 2] += 0.25
     eri[1, 0, 3, 2] += 0.25
     with pytest.raises(B.BundleError, match=r"\(tu\|vw\) = \(vw\|tu\)"):
-        B.validate(broken(eri_act=eri))
+        B.validate(broken(eri_active=eri))
 
 
 # ------------------------------------------------------------ electron counts
@@ -196,17 +203,35 @@ def test_parity_of_multiplicity_against_electron_count(broken):
 @pytest.mark.parametrize(
     "changes, expected",
     [
-        ({"nact": 3}, "holds 4 orbitals"),
-        ({"ncore": 0}, "window starts at MO 1"),
-        ({"act_stop": 9, "nact": 8}, "only 6 MOs"),
-        ({"act_start": 5, "act_stop": 5}, "empty"),
-        ({"act_start": 4, "ncore": 4, "nact": 1, "act_stop": 5},
+        ({"nact": 3}, "spans 4 orbitals"),
+        ({"ncore": 0}, "window starts at MO 2"),
+        ({"active_last": 9, "nact": 8}, "only 6 MOs"),
+        ({"active_first": 6, "active_last": 5}, "empty"),
+        ({"active_first": 0}, "the window is 1-based"),
+        ({"active_first": 5, "ncore": 4, "nact": 1, "active_last": 5},
          "would not be doubly occupied"),
     ],
 )
 def test_bad_active_windows_are_rejected(broken, changes, expected):
     with pytest.raises(B.BundleError, match=expected):
         B.validate(broken(**changes))
+
+
+def test_the_window_is_one_based_and_inclusive(synthetic):
+    """active_first/active_last are NFIRST/NLAST from the Gaussian route."""
+    assert (synthetic.active_first, synthetic.active_last) == (2, 5)
+    assert synthetic.nact == synthetic.active_last - synthetic.active_first + 1
+    # and the accessors are the only place that becomes 0-based indexing
+    assert synthetic.active == slice(1, 5)
+    assert (synthetic.active_start, synthetic.active_stop) == (1, 5)
+    assert synthetic.core == slice(0, 1)
+    assert synthetic.nfrozen_virtual == 1
+
+
+def test_an_off_by_one_window_does_not_pass_quietly(broken):
+    """Reading active_first as 0-based would give ncore one too many."""
+    with pytest.raises(B.BundleError, match="frozen core"):
+        B.validate(broken(active_first=3))
 
 
 def test_occupied_frozen_virtual_is_rejected(broken):
@@ -218,7 +243,7 @@ def test_occupied_frozen_virtual_is_rejected(broken):
 def test_shape_mismatch_reports_the_dimension_it_expected(broken):
     good = broken()
     with pytest.raises(B.BundleError) as excinfo:
-        B.validate(broken(eri_act=good.eri_act[:3, :3, :3, :3]))
+        B.validate(broken(eri_active=good.eri_active[:3, :3, :3, :3]))
     assert "expected (4, 4, 4, 4)" in _message(excinfo)
     assert "nact x nact x nact x nact" in _message(excinfo)
 
@@ -227,11 +252,11 @@ def test_shape_mismatch_reports_the_dimension_it_expected(broken):
 
 def test_ks_reference_may_not_carry_a_gaussian_fock(broken):
     with pytest.raises(B.BundleError, match="exchange-correlation"):
-        B.validate(broken(reference="RKS"))
+        B.validate(broken(reference_type="RKS"))
 
 
 def test_ks_reference_with_a_rebuilt_fock_is_fine(broken):
-    B.validate(broken(reference="RKS", fock_source="pyscf_rebuilt"))
+    B.validate(broken(reference_type="RKS", fock_source="pyscf_rebuilt"))
 
 
 def test_a_fock_matrix_without_a_source_is_rejected(broken):
@@ -240,13 +265,13 @@ def test_a_fock_matrix_without_a_source_is_rejected(broken):
 
 
 def test_a_source_without_a_fock_matrix_is_rejected(broken):
-    with pytest.raises(B.BundleError, match="no fock_ao_alpha is stored"):
-        B.validate(broken(fock_ao_alpha=None, fock_ao_beta=None))
+    with pytest.raises(B.BundleError, match="no F_alpha_ao is stored"):
+        B.validate(broken(F_alpha_ao=None, F_beta_ao=None))
 
 
 def test_unknown_reference_is_rejected(broken):
     with pytest.raises(B.BundleError, match="never inferred"):
-        B.validate(broken(reference="UHF"))
+        B.validate(broken(reference_type="UHF"))
 
 
 # --------------------------------------------------------------- file errors
@@ -271,7 +296,7 @@ def test_load_rejects_a_future_schema(synthetic, tmp_path):
 def test_load_reports_missing_keys_by_name(synthetic, tmp_path):
     path = B.save(synthetic, tmp_path / "truncated.npz")
     with np.load(path) as data:
-        payload = {key: data[key] for key in data.files if key != "eri_act"}
+        payload = {key: data[key] for key in data.files if key != "eri_active"}
     np.savez(path, **payload)
     with pytest.raises(B.BundleError, match="missing required keys: eri_act"):
         B.load(path)
@@ -297,10 +322,10 @@ def test_save_refuses_to_write_an_invalid_bundle(broken, tmp_path):
 def test_validation_reports_every_problem_at_once(broken):
     """One run of the reader should surface every fault, not the first one."""
     good = broken()
-    hcore = np.array(good.hcore_ao, copy=True)
+    hcore = np.array(good.Hcore_ao, copy=True)
     hcore[0, 1] += 1e-3
     with pytest.raises(B.BundleError) as excinfo:
-        B.validate(broken(hcore_ao=hcore, multiplicity=0))
+        B.validate(broken(Hcore_ao=hcore, multiplicity=0))
     message = _message(excinfo)
     assert "not symmetric" in message
     assert "not a positive integer" in message
@@ -313,5 +338,5 @@ def test_validation_reports_every_problem_at_once(broken):
 def test_committed_fixtures_load_and_validate(fixture_path, name):
     bundle = B.load(fixture_path(name))
     assert bundle.schema_version == B.SCHEMA_VERSION
-    assert bundle.nact == bundle.act_stop - bundle.act_start
+    assert bundle.nact == bundle.active_last - bundle.active_first + 1
     assert json.dumps(bundle.provenance)  # provenance survives the round trip

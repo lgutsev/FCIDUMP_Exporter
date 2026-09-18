@@ -26,7 +26,7 @@ def _run(capsys, *argv):
 def test_validate_accepts_a_good_bundle(capsys, fixture_path):
     code, output = _run(capsys, "validate", str(fixture_path("ch2_rohf")))
     assert code == 0
-    assert "valid against schema v1" in output
+    assert "valid against schema v2" in output
     assert "active window MOs 2-13" in output
     assert "Fock source   pyscf_rebuilt" in output
 
@@ -78,7 +78,7 @@ def test_validate_warns_about_kohn_sham_orbitals(capsys, tmp_path, synthetic):
     from dataclasses import replace
 
     path = save(
-        replace(synthetic, reference="RKS", fock_source="pyscf_rebuilt"),
+        replace(synthetic, reference_type="RKS", fock_source="pyscf_rebuilt"),
         tmp_path / "ks.npz",
     )
     code, output = _run(capsys, "validate", str(path))
@@ -154,7 +154,7 @@ def test_extract_writes_where_it_is_told(capsys, monkeypatch, tmp_path, fixture_
     assert code == 0
     assert out.exists()
     assert f"wrote {out}" in output
-    assert load(out).reference == "RHF"
+    assert load(out).reference_type == "RHF"
 
 
 def test_extract_reports_a_reader_failure_as_a_sentence(

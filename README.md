@@ -143,45 +143,60 @@ traceback. MOKIT is not installable from PyPI.
 ## The bundle
 
 `matfile.py` runs where gauopen lives and emits one `.npz`; everything
-downstream reads only that. The schema is version `1`:
+downstream reads only that. The schema is version `2`:
 
 | Key | Type | Meaning |
 |---|---|---|
-| `schema_version` | int | `1` |
-| `reference` | str | `RHF`, `ROHF`, `RKS` or `ROKS` |
+| `schema_version` | int | `2` |
+| `source_program`, `source_file` | str | where this came from |
+| `reference_type` | str | `RHF`, `ROHF`, `RKS` or `ROKS` |
 | `charge`, `multiplicity` | int | |
 | `nelec`, `nalpha`, `nbeta` | int | |
 | `nao`, `nmo` | int | AO and MO counts |
 | `ncore`, `nact` | int | frozen core and active orbital counts |
-| `act_start`, `act_stop` | int | the active window, 0-based and half-open |
-| `e_nuc` | float | nuclear repulsion |
-| `mo_coeff` | (nao, nmo) | |
-| `overlap`, `hcore_ao` | (nao, nao) | |
-| `eri_act` | (nact,)×4 | chemist's `(tu|vw)`, MO basis, active window only |
+| `active_first`, `active_last` | int | the active window, **1-based and inclusive** |
+| `enuc` | float | nuclear repulsion |
+| `C` | (nao, nmo) | MO coefficients |
+| `S`, `Hcore_ao` | (nao, nao) | AO overlap and core Hamiltonian |
+| `eri_active` | (nact,)×4 | chemist's `(tu|vw)`, MO basis, active window only |
 | `fock_source` | str | `gaussian`, `pyscf_rebuilt` or `none` |
 | `provenance` | str | JSON |
 
-Optional, and absent rather than null when unknown: `fock_ao_alpha`,
-`fock_ao_beta`, `mo_energy_alpha`, `mo_energy_beta`, `e_scf`, `atom_charges`.
+Optional, and absent rather than null when unknown: `F_alpha_ao`, `F_beta_ao`,
+`orbital_energies`, `orbital_energies_beta`, `escf`, `atom_charges`.
 
-Four conventions are worth knowing before writing against it.
+### Accessors
 
-`mo_coeff` is stored **column-wise**, `mo_coeff[ao, mo]`, so that `CᵀSC = I`.
-That is PySCF's convention, and every oracle here is PySCF. The algebra above is
-written in the row convention, where the same transform reads `C h_ao Cᵀ`;
-`matfile.py` decides which one Gaussian handed it by testing both numerically,
-rather than trusting a storage convention, and normalises to the column one.
+Do not do index arithmetic on the window. `bundle.active` is the 0-based slice,
+`bundle.core` the frozen-core slice, and `bundle.active_start` /
+`bundle.active_stop` the 0-based half-open pair. Also there:
+`nocc_active_alpha`, `nocc_active_beta`, `nelec_active` and `ms2` for the
+FCIDUMP header, `nfrozen_virtual`, `is_ks` and `has_fock`. Every conversion
+between the stored 1-based window and 0-based array indices happens inside
+those and nowhere else.
 
-The window is **0-based and half-open**: `act_start = NFIRST - 1` and
-`act_stop = NLAST` against the 1-based numbers in the Gaussian route. `ncore`
-and `nact` are stored redundantly, and validation requires all three to agree,
-so a window that does not mean what the route meant cannot pass quietly.
+### Conventions
+
+`C` is stored **column-wise**, `C[ao, mo]`, so that `CᵀSC = I`. That is PySCF's
+convention, and every oracle here is PySCF. The algebra above is written in the
+row convention, where the same transform reads `C h_ao Cᵀ`; `matfile.py` decides
+which one Gaussian handed it by testing both numerically, rather than trusting a
+storage convention, and normalises to the column one.
+
+`active_first` and `active_last` are the **1-based, inclusive** `NFIRST` and
+`NLAST` of the Gaussian route, stored unchanged so that a bundle records the job
+that was actually asked for. `ncore` and `nact` are stored redundantly, and
+validation requires all four to agree, so a window that does not mean what the
+route meant cannot pass quietly.
 
 Fock matrices are stored in the **AO** basis, so that a rotation of the active
 space never has to touch them. `hamiltonian.py` does the `CᵀFC` transform.
 
+`orbital_energies` is a **diagnostic** and is never a substitute for a Fock
+matrix. That substitution is the defect this package replaces.
+
 A **KS bundle never carries a stored Fock matrix at all.** `matfile.py` refuses
-to read the KS matrix into `fock_ao_*`, so a KS bundle arrives with
+to read the KS matrix into `F_alpha_ao`, so a KS bundle arrives with
 `fock_source = "none"` and the rebuilt-Fock path is the only way to use it.
 Validation rejects a KS reference together with `fock_source = "gaussian"` as a
 second line of defence.
@@ -194,16 +209,27 @@ PySCF.
 ## Using it
 
 ```bash
+g16dump inspect JOB.mat                    # can extract read this file?
 g16dump extract JOB.mat --fch JOB.fch --reference ROHF --window 6 40 --out JOB.npz
-g16dump validate JOB.npz --hamiltonian     # builds h', checks E_ref against E_scf
+g16dump validate JOB.npz --hamiltonian     # builds h', checks E_ref against escf
 g16dump dump JOB.npz --out FCIDUMP         # M3
 g16dump rotate JOB.npz --rotation U.npy --out rotated.npz   # M4
 ```
+
+`inspect` reports which of the blocks g16dump needs are present, under which
+labels, and whether their dimensions agree with the header. It is the M0 gate in
+miniature. For an exhaustive dump of everything a `.mat` contains, assuming
+nothing about labels at all, use `scripts/inspect_mat.py`.
 
 `--reference` is required and is never inferred. `--window` may be omitted, in
 which case the partition the `.mat` reports is used; either way it is
 cross-checked against the dimension of the two-electron block that is actually
 present, and a disagreement stops the run.
+
+Errors say what is scientifically wrong — that the α- and β-derived effective
+Hamiltonians disagree, that the MO coefficients are not orthonormal in the
+supplied AO overlap, that a multiplicity is incompatible with the electron
+count — rather than surfacing a raw numpy exception.
 
 ## KS warning
 
@@ -240,7 +266,7 @@ g16dump/      matfile.py   .mat -> .npz bundle (the only module importing QCMatE
               hamiltonian.py   h', E_core, E_ref from Fock matrices
               rotate.py    rotations inside the active space (seam, M4)
               write.py     FCIDUMP writer (seam, M3)
-              cli.py       extract / dump / validate / rotate
+              cli.py       inspect / extract / validate / dump / rotate
 gaussian/     route templates + how to run them
 legacy/       the original scripts, untouched, for reference and regression
 scripts/      inspect_mat.py, the matrix-element probe
