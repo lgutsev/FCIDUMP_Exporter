@@ -293,14 +293,14 @@ def validate(
         f"there are beta electrons.",
     )
     require(
+        bundle.nact > 0,
+        "the active space is empty (nact = 0); there is nothing to dump.",
+    )
+    require(
         bundle.nocc_a_act <= bundle.nact,
         f"the reference determinant needs {bundle.nocc_a_act} occupied alpha "
         f"orbitals inside a window that is only {bundle.nact} wide. The active "
         f"window excludes orbitals that are occupied in the reference.",
-    )
-    require(
-        bundle.nact > 0,
-        "the active space is empty (nact = 0); there is nothing to dump.",
     )
 
     # --- shapes ------------------------------------------------------------

@@ -57,6 +57,7 @@ demonstrates both the agreement and, for rotated orbitals, the failure.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -67,6 +68,7 @@ from .errors import (
     ConsistencyError,
     MissingDependencyError,
     ReferenceTypeError,
+    SchemaError,
     ValidationError,
     require,
 )
@@ -388,3 +390,74 @@ def active_space_hamiltonian(
         nocc_b_act=nocc_b,
         diagnostics=diagnostics,
     )
+
+
+# ------------------------------------------------- persisting a built Hamiltonian
+
+#: Marker distinguishing a rotated-Hamiltonian file from a .npz bundle.
+HAMILTONIAN_SCHEMA_VERSION = 1
+
+
+def save_hamiltonian(ash: ActiveSpaceHamiltonian, path: str, provenance: dict) -> None:
+    """Write a built active-space Hamiltonian to a ``.npz``.
+
+    This is a *different* artifact from a bundle, and deliberately so. A bundle
+    holds AO-basis quantities plus orbitals; a Hamiltonian file holds ``h'``,
+    the active ERIs and ``E_core`` -- objects that are already reduced to the
+    active space.
+
+    The distinction matters for rotations. A general rotation of the active
+    orbitals mixes occupied with virtual, which changes the reference
+    determinant and therefore the density that built ``f^s``. Rotating a bundle
+    would leave its stored Fock matrices describing a determinant that no longer
+    exists, and ``h'`` rebuilt from them would be wrong. Rotating the *reduced*
+    Hamiltonian has no such problem: ``h' -> U.T h' U`` and the four-index
+    transform are exact for any orthogonal ``U``, and ``E_core`` is untouched
+    because the frozen core is not involved.
+    """
+    np.savez_compressed(
+        path,
+        hamiltonian_schema_version=np.array(HAMILTONIAN_SCHEMA_VERSION),
+        h_eff=ash.h_eff,
+        eri_act=ash.eri_act,
+        e_core=np.array(ash.e_core),
+        e_ref=np.array(ash.e_ref),
+        e_act=np.array(ash.e_act),
+        nelec_act=np.array(ash.nelec_act),
+        ms2=np.array(ash.ms2),
+        nocc_a_act=np.array(ash.nocc_a_act),
+        nocc_b_act=np.array(ash.nocc_b_act),
+        provenance=np.array(json.dumps(provenance, default=str)),
+    )
+
+
+def load_hamiltonian(path: str) -> tuple[ActiveSpaceHamiltonian, dict]:
+    """Read a Hamiltonian written by :func:`save_hamiltonian`."""
+    with np.load(path, allow_pickle=False) as data:
+        if "hamiltonian_schema_version" not in data.files:
+            raise SchemaError(
+                f"{path} is not a g16dump Hamiltonian file (no "
+                f"hamiltonian_schema_version key). If it is a .npz bundle, use "
+                f"`g16dump dump` on it directly. Keys present: "
+                f"{sorted(data.files)}."
+            )
+        version = int(data["hamiltonian_schema_version"])
+        if version != HAMILTONIAN_SCHEMA_VERSION:
+            raise SchemaError(
+                f"{path} declares Hamiltonian schema version {version}; this "
+                f"build understands {HAMILTONIAN_SCHEMA_VERSION}."
+            )
+        provenance = json.loads(str(data["provenance"])) if "provenance" in data.files else {}
+        ash = ActiveSpaceHamiltonian(
+            h_eff=np.array(data["h_eff"]),
+            eri_act=np.array(data["eri_act"]),
+            e_core=float(data["e_core"]),
+            e_ref=float(data["e_ref"]),
+            e_act=float(data["e_act"]),
+            nelec_act=int(data["nelec_act"]),
+            ms2=int(data["ms2"]),
+            nocc_a_act=int(data["nocc_a_act"]),
+            nocc_b_act=int(data["nocc_b_act"]),
+            diagnostics=dict(provenance.get("diagnostics", {})),
+        )
+    return ash, provenance
