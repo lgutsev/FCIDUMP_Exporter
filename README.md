@@ -8,10 +8,12 @@ frozen core is folded analytically into an effective one-electron Hamiltonian
 `h'` and a scalar `E_core`. This takes seconds where a full-space dump takes
 days.
 
-**Status: M0 (inventory). Nothing downstream of the reader is implemented yet.**
-The Gaussian route section in `gaussian/` is still unverified, and the
-matrix-element labels for the Fock matrices are unconfirmed. See
-[Project status](#project-status).
+**Status: M1/M2. The core package is implemented and tested; the FCIDUMP writer
+is not.** `bundle.py`, `matfile.py` and `hamiltonian.py` are in place, and the
+frozen-core algebra is checked against an independent full-transform route. The
+Gaussian route section in `gaussian/` is still unverified and the
+matrix-element labels are still unconfirmed, so `extract` has not yet read a
+real `.mat`. See [Project status](#project-status).
 
 ## Why this exists
 
@@ -79,6 +81,12 @@ If that fails for ROHF, the stored Fock is Gaussian's Roothaan *effective*
 operator rather than `f^α`/`f^β`. **Do not average the two.** Disagreement is a
 bug signal; switch to the rebuilt-Fock path below.
 
+The gate behaves as designed on a Roothaan operator. Handed one for CH2/6-31G
+it rejects the input by 0.652 Ha, while the same job's genuine `f^α`/`f^β` agree
+to 7e-15. Which of the two a Gaussian `.mat` actually carries is still the M0
+question, and the answer changes nothing in the code: a Roothaan operator is
+rejected either way, and the rebuilt-Fock path is there either way.
+
 ### Reference, active and core energies
 
 ```
@@ -124,9 +132,78 @@ required for KS orbitals:
    cheaper than an `ao2mo`.
 4. Feed the result into the same functions as above.
 
+Step 1 is the only part that needs MOKIT, and it is separable:
+`hamiltonian.with_rebuilt_fock(bundle, mol)` takes any PySCF `Mole`, so the path
+can be exercised, and a molecule supplied, without MOKIT present.
+
 `pyscf` and `mokit` become runtime dependencies for this mode only. They are
 imported lazily, and their absence is reported as a clear error rather than a
-traceback.
+traceback. MOKIT is not installable from PyPI.
+
+## The bundle
+
+`matfile.py` runs where gauopen lives and emits one `.npz`; everything
+downstream reads only that. The schema is version `1`:
+
+| Key | Type | Meaning |
+|---|---|---|
+| `schema_version` | int | `1` |
+| `reference` | str | `RHF`, `ROHF`, `RKS` or `ROKS` |
+| `charge`, `multiplicity` | int | |
+| `nelec`, `nalpha`, `nbeta` | int | |
+| `nao`, `nmo` | int | AO and MO counts |
+| `ncore`, `nact` | int | frozen core and active orbital counts |
+| `act_start`, `act_stop` | int | the active window, 0-based and half-open |
+| `e_nuc` | float | nuclear repulsion |
+| `mo_coeff` | (nao, nmo) | |
+| `overlap`, `hcore_ao` | (nao, nao) | |
+| `eri_act` | (nact,)×4 | chemist's `(tu|vw)`, MO basis, active window only |
+| `fock_source` | str | `gaussian`, `pyscf_rebuilt` or `none` |
+| `provenance` | str | JSON |
+
+Optional, and absent rather than null when unknown: `fock_ao_alpha`,
+`fock_ao_beta`, `mo_energy_alpha`, `mo_energy_beta`, `e_scf`, `atom_charges`.
+
+Four conventions are worth knowing before writing against it.
+
+`mo_coeff` is stored **column-wise**, `mo_coeff[ao, mo]`, so that `CᵀSC = I`.
+That is PySCF's convention, and every oracle here is PySCF. The algebra above is
+written in the row convention, where the same transform reads `C h_ao Cᵀ`;
+`matfile.py` decides which one Gaussian handed it by testing both numerically,
+rather than trusting a storage convention, and normalises to the column one.
+
+The window is **0-based and half-open**: `act_start = NFIRST - 1` and
+`act_stop = NLAST` against the 1-based numbers in the Gaussian route. `ncore`
+and `nact` are stored redundantly, and validation requires all three to agree,
+so a window that does not mean what the route meant cannot pass quietly.
+
+Fock matrices are stored in the **AO** basis, so that a rotation of the active
+space never has to touch them. `hamiltonian.py` does the `CᵀFC` transform.
+
+A **KS bundle never carries a stored Fock matrix at all.** `matfile.py` refuses
+to read the KS matrix into `fock_ao_*`, so a KS bundle arrives with
+`fock_source = "none"` and the rebuilt-Fock path is the only way to use it.
+Validation rejects a KS reference together with `fock_source = "gaussian"` as a
+second line of defence.
+
+`provenance` carries the Gaussian filename, the route line, basis and method
+where known, the 1-based window as Gaussian saw it, the Git commit, the schema
+version, and whether the Fock matrix came from Gaussian or was rebuilt through
+PySCF.
+
+## Using it
+
+```bash
+g16dump extract JOB.mat --fch JOB.fch --reference ROHF --window 6 40 --out JOB.npz
+g16dump validate JOB.npz --hamiltonian     # builds h', checks E_ref against E_scf
+g16dump dump JOB.npz --out FCIDUMP         # M3
+g16dump rotate JOB.npz --rotation U.npy --out rotated.npz   # M4
+```
+
+`--reference` is required and is never inferred. `--window` may be omitted, in
+which case the partition the `.mat` reports is used; either way it is
+cross-checked against the dimension of the two-electron block that is actually
+present, and a disagreement stops the run.
 
 ## KS warning
 
@@ -161,13 +238,14 @@ path raises; use the rebuilt-Fock path. This warning is repeated in the CLI.
 g16dump/      matfile.py   .mat -> .npz bundle (the only module importing QCMatEl)
               bundle.py    load/validate the .npz bundle, shape assertions
               hamiltonian.py   h', E_core, E_ref from Fock matrices
-              rotate.py    unitary rotations inside the active space
-              write.py     vectorized FCIDUMP writer + Dice nocc line
-              cli.py       g16dump extract / g16dump dump
+              rotate.py    rotations inside the active space (seam, M4)
+              write.py     FCIDUMP writer (seam, M3)
+              cli.py       extract / dump / validate / rotate
 gaussian/     route templates + how to run them
 legacy/       the original scripts, untouched, for reference and regression
 scripts/      inspect_mat.py, the matrix-element probe
 tests/        fixtures as committed .npz, no Gaussian and no gauopen needed
+              make_fixtures.py regenerates them (needs pyscf)
 ```
 
 The split exists because gauopen may not build everywhere and needs a compiled
@@ -199,12 +277,16 @@ Only `g16dump extract` (i.e. `matfile.py`) needs it.
 | Milestone | What it delivers | State |
 |---|---|---|
 | M0 | legacy inventory, `.mat` probe, route templates | probe and templates written; **waiting on cluster output** |
-| M1 | test systems + two independent oracles | not started |
-| M2 | `bundle.py`, `hamiltonian.py`, `write.py` + gates | not started |
-| M3 | writer and solver interface | not started |
-| M4 | active-space rotations | not started |
+| M1 | test systems + two independent oracles | four `.npz` fixtures committed; `h'` and `E_core` checked against a full-transform route for RHF and ROHF; the wider oracle matrix (O2/NH, a KS set, the legacy regression) outstanding |
+| M2 | `bundle.py`, `hamiltonian.py`, `write.py` + gates | `bundle.py` and `hamiltonian.py` done, with the schema, electron-count, window, Hermiticity, orthonormality, ERI-symmetry and α/β gates |
+| M3 | writer and solver interface | seam in place, not implemented |
+| M4 | active-space rotations | seam in place, not implemented |
 | M5 | benchmarks | not started |
-| M6 | packaging, CI, DOI | not started |
+| M6 | packaging, CI, DOI | in progress |
+
+What M0 still gates is `extract` alone. Everything downstream of the bundle is
+exercised by the committed fixtures, so the labels in
+`g16dump.matfile.LABELS` are the only thing waiting on a real `.mat`.
 
 Open questions blocking M0's gate are listed in
 [`gaussian/README.md`](gaussian/README.md) and in the probe script's output
