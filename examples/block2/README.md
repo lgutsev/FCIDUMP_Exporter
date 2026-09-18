@@ -68,9 +68,9 @@ time, because DMRG converging to the wrong state does not look like an error:
 the sweeps converge, the discarded weight goes to `1e-14`, and the energy is
 simply too high. It happened while this example was being written — a
 hand-written schedule with an aggressive bond dimension ramp settled at
-−38.6989 Ha, 0.25 Ha above the true active-space ground state and 0.17 Ha above
-the reference determinant itself. `schedule default` found −38.9500811 Ha on
-the same input. That is why this example uses the default schedule.
+−38.6989055 Ha, 0.25 Ha above the true active-space ground state and 0.17 Ha
+above the reference determinant itself. `schedule default` found −38.9500811 Ha
+on the same input. That is why this example uses the default schedule.
 
 ## How this example was checked
 
@@ -79,11 +79,11 @@ Block2 3.x (installed from PyPI) was run on an FCIDUMP built from
 
 | | Energy (Ha) |
 |---|---|
-| Block2, `dmrg.conf` as committed | −38.950081068015 |
+| Block2, `dmrg.conf` as committed | −38.950081068017 |
 | PySCF `fci.direct_spin1` on the same `h'` and active ERIs | −38.950081068018 |
 | reference determinant, `E_ref` | −38.868485458 |
 
-The first two agree to 3e-12, and both lie below `E_ref`, as they must.
+The first two agree to 1.4e-12, and both lie below `E_ref`, as they must.
 `make_block2_input.py` was then run on that FCIDUMP and its output reproduced
 the committed `dmrg.conf`; the generated file was run through Block2 to the
 same energy. The header parser was also run against the two FCIDUMPs in
