@@ -215,7 +215,7 @@ needs any of these.
 | M3 | writer and solver interface | not started |
 | M4 | active-space rotations | not started |
 | M5 | benchmarks | not started |
-| M6 | packaging, CI, DOI | not started |
+| M6 | packaging, CI, DOI | **CI and packaging done** (3.9–3.13, numpy-only core enforced); LICENSE, CITATION.cff and DOI still open |
 
 Open questions blocking M0's gate are listed in
 [`gaussian/README.md`](gaussian/README.md) and in the probe script's output
