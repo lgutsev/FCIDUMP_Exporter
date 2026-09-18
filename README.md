@@ -17,6 +17,32 @@ many-body spectrum. The Gaussian route section in `gaussian/` is still
 unverified and the matrix-element labels are still unconfirmed, so `extract` has
 not yet read a real `.mat`. See [Project status](#project-status).
 
+## What v1 is, and is not
+
+**v1 is a fixed-orbital active-space Hamiltonian exporter.** It takes orbitals
+Gaussian has already converged, takes an active window you have already chosen,
+folds the frozen core into `h'` and `E_core` exactly, and writes the result as a
+FCIDUMP. The orbitals that come out are the orbitals that went in.
+
+It does **not** perform:
+
+- **CASSCF.** The orbitals are never re-optimized against a correlated wave
+  function.
+- **DMRG-SCF** or **SHCISCF.** No orbital optimization is driven by a solver,
+  and there is no loop back from Dice or Block2 into the orbitals.
+- **active-space selection.** Which orbitals go in the window is your decision,
+  taken in Gaussian; nothing here ranks, screens or suggests orbitals.
+- **dynamic correlation.** No NEVPT2, CASPT2, MRCI or any other post-CAS
+  correction. What comes out is a bare active-space Hamiltonian.
+- **general inactive–active orbital optimization.** Rotations exist, but only
+  *inside* the active space, where they leave the many-body spectrum invariant.
+  Anything that moves an orbital across the core/active boundary needs integrals
+  from outside the window, which this package never has. See
+  [Rotating the active space](#rotating-the-active-space).
+
+Those jobs belong to the solver or to another program. Keeping them out is what
+lets this one be small enough to verify.
+
 ## Why this exists
 
 An earlier set of scripts (kept verbatim in `legacy/`) implemented this idea for
@@ -45,6 +71,28 @@ from the J/K correction, because the Fock off-diagonals were never there.
 off-diagonals included, with one code path for RHF and ROHF. Not from orbital
 energies, and not with `ak`/`bk`/`ck` coupling coefficients — that approach has
 already been tried and failed.
+
+## What references are supported
+
+| Reference | Orbitals | Fock matrices | Status |
+|---|---|---|---|
+| RHF | closed shell, doubly occupied | Gaussian's `F` when the `.mat` carries one, otherwise rebuilt | supported |
+| ROHF | spin-restricted open shell, high spin | genuine `f^α`/`f^β`, or rebuilt; a Roothaan effective operator is rejected | supported |
+| RKS, ROKS | Kohn–Sham | **always** rebuilt; the stored KS matrix is never used | supported, orbitals only |
+| UHF | different α and β orbitals | — | not supported; see [Limitations](#limitations) |
+
+RHF and ROHF go down one code path, not two. The closed-shell case is the
+open-shell expression with `O_α = O_β`, and the README derives that reduction
+[below](#reduction-to-the-closed-shell-case) rather than special-casing it.
+
+Open-shell references are taken in the **high-spin convention**: `nalpha ≥
+nbeta`, and `nalpha − nbeta = multiplicity − 1`. Validation rejects a bundle
+that says otherwise rather than reinterpreting it.
+
+For RKS and ROKS the orbitals are Kohn–Sham but the Hamiltonian written is
+always the *HF* Hamiltonian evaluated in them. That is a deliberate choice, and
+the reason a KS bundle never carries a stored Fock matrix at all; see the
+[KS warning](#ks-warning).
 
 ## The math
 
@@ -142,6 +190,40 @@ can be exercised, and a molecule supplied, without MOKIT present.
 imported lazily, and their absence is reported as a clear error rather than a
 traceback. MOKIT is not installable from PyPI.
 
+## What must come from Gaussian
+
+Everything below has to be in the `.mat` (or, for the molecular geometry behind
+the rebuilt-Fock path, in the matching `.fch`). Nothing here is reconstructed
+from something else, and nothing is guessed.
+
+| Quantity | Bundle field | Required | Note |
+|---|---|---|---|
+| AO overlap | `S` | yes | also the metric the MO orthonormality check uses |
+| core Hamiltonian, AO basis | `Hcore_ao` | yes | |
+| MO coefficients | `C` | yes | orientation determined numerically, not assumed |
+| AO Fock matrices | `F_alpha_ao`, `F_beta_ao` | no | absent means the rebuilt-Fock path; never substituted by orbital energies |
+| two-electron integrals over the window | `eri_active` | yes | chemist's `(tu\|vw)`, MO basis, active orbitals only |
+| nuclear repulsion | `enuc` | yes | |
+| electron and orbital counts | `nelec`, `nalpha`, `nbeta`, `nao`, `nmo` | yes | cross-checked against charge and multiplicity |
+| the active window | `active_first`, `active_last` | yes | from the route, or the partition the file reports; cross-checked against the ERI dimension |
+| SCF energy | `escf` | no | not used in the algebra; used to check `E_ref` |
+| orbital energies | `orbital_energies` | no | **diagnostic only** |
+
+The one thing this package deliberately does not accept from Gaussian is a
+Roothaan effective ROHF operator in place of `f^α` and `f^β`. It is not the
+operator the frozen-core fold inverts, and the α/β consistency check catches it:
+handed one for CH2/6-31G, the gate rejects the input by 0.652 Ha.
+
+> **The Gaussian route templates in [`gaussian/`](gaussian/) are still labelled
+> UNVERIFIED.** No real Gaussian job has yet produced a `.mat` that the probe
+> has read, so the matrix-element *labels* in `g16dump.matfile.LABELS` — which
+> block is called what, whether the AO Fock is there at all, how ROHF stores its
+> α and β matrices, how the two-electron block is packed — are not confirmed.
+> Until they are, `g16dump extract` is the one command in this package that has
+> not been run against real Gaussian output. Everything downstream of the bundle
+> has, against committed `.npz` fixtures. Run `g16dump inspect JOB.mat` on a
+> real file to see which labels are actually present before trusting `extract`.
+
 ## The bundle
 
 `matfile.py` runs where gauopen lives and emits one `.npz`; everything
@@ -232,25 +314,6 @@ beside the file, and the FCIDUMP itself stays strictly standard.
 
 ## Rotating the active space
 
-`h' → Uᵀh'U` with the matching four-index transform of the ERIs, for any real
-orthogonal `U`. `E_core`, the electron counts and the many-body spectrum are
-invariant, which is the sharpest correctness test in the package: the FCI
-eigenvalues are computed before and after a random rotation and compared, with
-numpy alone, in `tests/test_rotate.py`. A non-orthogonal matrix is refused
-unless `--diagnostic` says to allow it.
-
-Two things can be rotated and the difference matters. `rotate_hamiltonian`
-rotates `h'` and the ERIs and is exact for any `U`. `rotate_active_space`
-rotates the orbitals themselves, and there is a precondition: the stored Fock
-matrices were built from the reference determinant's own density, so a `U` that
-mixes an active occupied orbital with an active virtual one leaves them
-describing a determinant that no longer exists. Those bundles come back with
-their Fock matrices **dropped**, a warning, and the reason in their provenance,
-so `active_hamiltonian` refuses them and says to rebuild through PySCF rather
-than quietly returning a wrong `h'`.
-
-## Rotating the active space
-
 `h' -> Uᵀh'U` with the matching four-index transform of the ERIs, for any real
 orthogonal `U`. `E_core`, the electron counts and the many-body spectrum are
 invariant, which is the sharpest correctness test in the package: the FCI
@@ -294,6 +357,68 @@ Hamiltonians disagree, that the MO coefficients are not orthonormal in the
 supplied AO overlap, that a multiplicity is incompatible with the electron
 count — rather than surfacing a raw numpy exception.
 
+## Using the output with Dice
+
+[`examples/dice/`](examples/dice/) has a worked `input.dat` and a thin script
+that writes one from an FCIDUMP's header. In short:
+
+```bash
+g16dump dump JOB.npz --out FCIDUMP
+python3 examples/dice/make_dice_input.py FCIDUMP --out input.dat
+mpirun -np 4 /path/to/Dice/Dice input.dat > output.dat
+```
+
+Dice reads a file named `FCIDUMP` in the directory it runs in, so the `--out`
+name is not a suggestion. The part worth checking by hand is the determinant
+block: Dice numbers **spin** orbitals, so spatial orbital `i` (0-based) is alpha
+`2i` and beta `2i + 1`, and `nocc` counts electrons, not orbitals. The example
+README explains the whole file line by line.
+
+Dice is a compiled MPI program and is not installed here or in CI, so that
+example is checked against Dice's documented input format and against
+`legacy/input_back.dat` — an input written by hand for one of the legacy dumps,
+whose `nocc` block the generator reproduces exactly from the FCIDUMP header. It
+has not been run through Dice itself.
+
+## Using the output with Block2
+
+[`examples/block2/`](examples/block2/) has a worked `dmrg.conf` and the matching
+generator:
+
+```bash
+g16dump dump JOB.npz --out FCIDUMP
+python3 examples/block2/make_block2_input.py FCIDUMP --out dmrg.conf
+block2main dmrg.conf > dmrg.out
+```
+
+`nelec`, `spin` and `sym` come straight from the FCIDUMP header — `spin` is
+`MS2`, which Block2 calls 2S, and `sym` is `c1` because g16dump writes `ORBSYM`
+all `1`. `maxM` is the one number that is a scientific choice rather than a
+transcription.
+
+This one is checked by running it. On the FCIDUMP that
+`g16dump dump tests/data/ch2_rohf.npz` produces, Block2 gives
+−38.950081068018 Ha against −38.950081068018 from an independent PySCF FCI on
+the same `h'` and active ERIs; the closed-shell `tests/data/h2o_rhf.npz` gives
+−75.012500153955 against −75.012500153957. Both sit below their own `E_ref`, as
+an active-space ground state must.
+
+### Checking a solver result
+
+Whatever the solver, the first check is the same one: the ground-state energy it
+reports must come out below the `E_ref` that
+
+```bash
+g16dump validate JOB.npz --hamiltonian
+```
+
+prints for the same bundle, because that is the energy of a determinant inside
+the space the solver is diagonalizing. A number above `E_ref` means the solver
+was pointed at the wrong determinant or the wrong symmetry sector — a wrong
+`nocc` line, a wrong `spin`, a wrong `ORBSYM` — not that the dump is wrong. It
+is worth making every time; a DMRG run that has converged to the wrong state
+looks exactly like one that has converged.
+
 ## KS warning
 
 **For Kohn–Sham orbitals the stored KS matrix contains exchange–correlation and
@@ -301,15 +426,34 @@ must never be used as `f^σ`.** The active-space Hamiltonian is always the *HF*
 Hamiltonian evaluated in the KS orbitals. A KS bundle fed to the stored-Fock
 path raises; use the rebuilt-Fock path. This warning is repeated in the CLI.
 
-## Not in v1
+## Limitations
 
-- **UHF references** (different α and β orbitals). A spin-restricted FCIDUMP
-  cannot represent them. The workaround is to generate UHF natural orbitals
-  (UNOs) in Gaussian and send those through the normal path. A UHF-FCIDUMP
-  writer can come later if a solver we use needs one.
-- **ORCA input.** Possible later through the same bundle format.
-- **Orbital optimization (SHCISCF) across the core/active boundary.** That needs
-  integrals from outside the window; use PySCF for it.
+Scope limits are listed under [What v1 is, and is not](#what-v1-is-and-is-not).
+These are the rest.
+
+- **`extract` has not read a real Gaussian `.mat` yet.** The route templates are
+  labelled UNVERIFIED and the matrix-element labels are unconfirmed. See
+  [What must come from Gaussian](#what-must-come-from-gaussian).
+- **UHF references** (different α and β orbitals) are not supported. A
+  spin-restricted FCIDUMP cannot represent them. The workaround is to generate
+  UHF natural orbitals (UNOs) in Gaussian and send those through the normal
+  path. A UHF-FCIDUMP writer can come later if a solver we use needs one.
+- **Point-group symmetry is not carried through.** `ORBSYM` is written all-`1`,
+  i.e. C1, because the windowed route does not bring Gaussian's irrep labels
+  with it and a rotated active space has none left to label. A solver therefore
+  cannot exploit symmetry on these dumps, and cannot be asked for a state by
+  irrep.
+- **The core must be doubly occupied.** Every orbital below the window is a
+  frozen closed shell; an open-shell orbital outside the active space is not
+  representable, and validation rejects a window that implies one.
+- **A rotation that mixes active occupied with active virtual orbitals drops the
+  bundle's Fock matrices**, so such a bundle needs the PySCF rebuild before it
+  can produce a Hamiltonian. This is deliberate; see
+  [Rotating the active space](#rotating-the-active-space).
+- **The rebuilt-Fock path needs `pyscf`, and reading a molecule from an `.fch`
+  needs MOKIT**, which is not installable from PyPI. Both are imported lazily,
+  and their absence is reported rather than raised as a traceback.
+- **No ORCA input.** Possible later through the same bundle format.
 
 ## Design constraints
 
@@ -330,7 +474,10 @@ g16dump/      matfile.py   .mat -> .npz bundle (the only module importing QCMatE
               rotate.py    rotations inside the active space
               write.py     FCIDUMP writer
               cli.py       inspect / extract / validate / dump / rotate
-gaussian/     route templates + how to run them
+gaussian/     route templates + how to run them (UNVERIFIED)
+examples/     dice/ and block2/: one worked solver input each, plus a thin
+              generator that reads an FCIDUMP header. Nothing in g16dump/
+              imports them, and they import nothing from g16dump/
 legacy/       the original scripts, untouched, for reference and regression
 scripts/      inspect_mat.py, the matrix-element probe
 tests/        fixtures as committed .npz, no Gaussian and no gauopen needed
@@ -368,7 +515,7 @@ Only `g16dump extract` (i.e. `matfile.py`) needs it.
 | M0 | legacy inventory, `.mat` probe, route templates | probe and templates written; **waiting on cluster output** |
 | M1 | test systems + two independent oracles | four `.npz` fixtures committed; `h'` and `E_core` checked against a full-transform route for RHF and ROHF; the wider oracle matrix (O2/NH, a KS set, the legacy regression) outstanding |
 | M2 | `bundle.py`, `hamiltonian.py`, `write.py` + gates | `bundle.py` and `hamiltonian.py` done, with the schema, electron-count, window, Hermiticity, orthonormality, ERI-symmetry and α/β gates |
-| M3 | writer and solver interface | writer done, round-tripped through an independent parser and through PySCF's; the Dice/Block2 examples are outstanding |
+| M3 | writer and solver interface | writer done, round-tripped through an independent parser and through PySCF's; Dice and Block2 examples in [`examples/`](examples/), the Block2 one checked by running it |
 | M4 | active-space rotations | done, with the many-body spectrum checked before and after in a numpy-only FCI |
 | M5 | benchmarks | not started |
 | M6 | packaging, CI, DOI | in progress |
