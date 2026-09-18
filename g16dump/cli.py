@@ -13,8 +13,8 @@ caught in :func:`main` and reported with its type, so a genuine bug is still
 visible but never arrives as a bare traceback.
 
 ``dump`` writes the FCIDUMP and, when the bundle carries provenance, the sidecar
-record beside it. ``rotate`` is wired to its module but that is an M4 seam, so it
-reports that plainly rather than pretending.
+record beside it. ``rotate`` re-expresses a bundle's active space in a rotated
+orbital basis; see :mod:`g16dump.rotate` on what a rotation can cost a bundle.
 """
 
 from __future__ import annotations
@@ -306,7 +306,7 @@ def _run_dump(args) -> int:
 def _add_rotate(subparsers) -> None:
     parser = subparsers.add_parser(
         "rotate",
-        help="rotate a bundle's active space (M4, not implemented)",
+        help="rotate a bundle's active space by a real orthogonal matrix",
         description=(
             "Apply a real orthogonal transformation entirely within the active "
             "space and write the rotated bundle. The many-body spectrum is "
@@ -321,6 +321,15 @@ def _add_rotate(subparsers) -> None:
         help="a .npy file holding the real orthogonal (nact, nact) matrix",
     )
     parser.add_argument("--out", required=True, help="path for the rotated bundle")
+    parser.add_argument(
+        "--diagnostic",
+        action="store_true",
+        help=(
+            "accept a matrix that is not orthogonal. The Hamiltonian's spectrum "
+            "is not invariant under one, so this is for experiments that mean to "
+            "break that invariant and nothing else."
+        ),
+    )
     parser.set_defaults(func=_run_rotate)
 
 
@@ -340,14 +349,16 @@ def _run_rotate(args) -> int:
         return 1
 
     try:
-        save(rotate_active_space(bundle, rotation), args.out)
+        rotated = rotate_active_space(bundle, rotation, diagnostic=args.diagnostic)
+        out = save(rotated, args.out)
     except (BundleError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
-    except NotImplementedError as exc:
-        print(f"error: {exc}", file=sys.stderr)
-        return 2
-    print(f"wrote {args.out}")
+
+    print(f"wrote {out}")
+    print(rotated.describe())
+    if rotated.fock_source == "none" and bundle.fock_source != "none":
+        print(f"\nnote: {rotated.provenance['fock_dropped_reason']}.")
     return 0
 
 

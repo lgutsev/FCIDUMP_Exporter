@@ -138,7 +138,7 @@ def test_inspect_reports_a_reader_failure_as_a_sentence(capsys, monkeypatch):
     assert "gauopen is not importable" in output
 
 
-# ------------------------------------------------------------------- dump
+# ------------------------------------------------------- dump and rotate
 
 def test_dump_writes_a_fcidump_where_it_was_told_to(capsys, fixture_path, tmp_path):
     target = tmp_path / "somewhere" / "FCIDUMP"
@@ -184,17 +184,30 @@ def test_dump_still_runs_the_hamiltonian_gate_first(capsys, fixture_path, tmp_pa
     assert "Do not average" in output
 
 
-def test_rotate_says_plainly_that_it_is_not_implemented(
+def test_rotate_writes_a_rotated_bundle(capsys, fixture_path, tmp_path):
+    rotation = tmp_path / "u.npy"
+    np.save(rotation, np.eye(12))
+    out = tmp_path / "rotated.npz"
+    code, output = _run(
+        capsys, "rotate", str(fixture_path("ch2_rohf")), "--rotation", str(rotation),
+        "--out", str(out),
+    )
+    assert code == 0
+    assert str(out) in output
+    assert load(out).nact == 12
+
+
+def test_rotate_refuses_a_matrix_that_is_not_a_rotation(
     capsys, fixture_path, tmp_path
 ):
     rotation = tmp_path / "u.npy"
-    np.save(rotation, np.eye(12))
+    np.save(rotation, 2.0 * np.eye(12))
     code, output = _run(
         capsys, "rotate", str(fixture_path("ch2_rohf")), "--rotation", str(rotation),
         "--out", str(tmp_path / "rotated.npz"),
     )
-    assert code == 2
-    assert "M4" in output
+    assert code == 1
+    assert "not orthogonal" in output
 
 
 # ------------------------------------------------------------------ extract

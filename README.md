@@ -8,13 +8,14 @@ frozen core is folded analytically into an effective one-electron Hamiltonian
 `h'` and a scalar `E_core`. This takes seconds where a full-space dump takes
 days.
 
-**Status: M1-M3. The core package and the FCIDUMP writer are implemented and
-tested.** `bundle.py`, `matfile.py`, `hamiltonian.py` and `write.py` are in
-place; the frozen-core algebra is checked against an independent full-transform
-route and the written FCIDUMP against an independent parser. The
-Gaussian route section in `gaussian/` is still unverified and the
-matrix-element labels are still unconfirmed, so `extract` has not yet read a
-real `.mat`. See [Project status](#project-status).
+**Status: M1-M4. The core package, the FCIDUMP writer and the active-space
+rotations are implemented and tested.** `bundle.py`, `matfile.py`,
+`hamiltonian.py`, `write.py` and `rotate.py` are in place; the frozen-core
+algebra is checked against an independent full-transform route, the written
+FCIDUMP against an independent parser, and the rotations against the exact
+many-body spectrum. The Gaussian route section in `gaussian/` is still
+unverified and the matrix-element labels are still unconfirmed, so `extract` has
+not yet read a real `.mat`. See [Project status](#project-status).
 
 ## Why this exists
 
@@ -205,7 +206,8 @@ second line of defence.
 `provenance` carries the Gaussian filename, the route line, basis and method
 where known, the 1-based window as Gaussian saw it, the Git commit, the schema
 version, and whether the Fock matrix came from Gaussian or was rebuilt through
-PySCF.
+PySCF. Every rotation appends a record of itself, so a bundle says how it was
+re-expressed and never silently forgets.
 
 ## The FCIDUMP
 
@@ -219,13 +221,53 @@ block, which is too small to be worth compressing and too consequential to
 truncate.
 
 `ORBSYM` defaults to all-`1`, i.e. C1. The windowed route does not carry
-Gaussian's irrep labels through, and a wrong `ORBSYM` makes a solver search the
-wrong symmetry sector, so the default is the one that claims nothing.
+Gaussian's irrep labels through, and a rotated active space has no symmetry left
+to label; a wrong `ORBSYM` makes a solver search the wrong symmetry sector, so
+the default is the one that claims nothing.
 
 FCIDUMP has no comment syntax its readers agree on — PySCF's parser, for one,
 joins the lines above `&END` and splits them on `=`, so a comment line there
 makes the file unreadable. Provenance therefore goes in `FCIDUMP.provenance.json`
 beside the file, and the FCIDUMP itself stays strictly standard.
+
+## Rotating the active space
+
+`h' → Uᵀh'U` with the matching four-index transform of the ERIs, for any real
+orthogonal `U`. `E_core`, the electron counts and the many-body spectrum are
+invariant, which is the sharpest correctness test in the package: the FCI
+eigenvalues are computed before and after a random rotation and compared, with
+numpy alone, in `tests/test_rotate.py`. A non-orthogonal matrix is refused
+unless `--diagnostic` says to allow it.
+
+Two things can be rotated and the difference matters. `rotate_hamiltonian`
+rotates `h'` and the ERIs and is exact for any `U`. `rotate_active_space`
+rotates the orbitals themselves, and there is a precondition: the stored Fock
+matrices were built from the reference determinant's own density, so a `U` that
+mixes an active occupied orbital with an active virtual one leaves them
+describing a determinant that no longer exists. Those bundles come back with
+their Fock matrices **dropped**, a warning, and the reason in their provenance,
+so `active_hamiltonian` refuses them and says to rebuild through PySCF rather
+than quietly returning a wrong `h'`.
+
+## Rotating the active space
+
+`h' -> Uᵀh'U` with the matching four-index transform of the ERIs, for any real
+orthogonal `U`. `E_core`, the electron counts and the many-body spectrum are
+invariant, which is the sharpest correctness test in the package: the FCI
+eigenvalues are computed before and after a random rotation and compared, with
+numpy alone, in `tests/test_rotate.py`. A non-orthogonal matrix is refused unless
+`--diagnostic` says to allow it.
+
+Two things can be rotated and the difference matters. `rotate_hamiltonian`
+rotates `h'` and the ERIs and is exact for any `U`. `rotate_active_space` rotates
+the orbitals themselves, and there is a precondition: the stored Fock matrices
+were built from the reference determinant's own density, so a `U` that mixes an
+active occupied orbital with an active virtual one leaves them describing a
+determinant that no longer exists. Those bundles come back with their Fock
+matrices **dropped**, a warning, and the reason in their provenance, so
+`active_hamiltonian` refuses them and says to rebuild through PySCF rather than
+quietly returning a wrong `h'`. Orbital energies are dropped by every rotation:
+inside a rotated window they are the diagonal of nothing.
 
 ## Using it
 
@@ -234,7 +276,7 @@ g16dump inspect JOB.mat                    # can extract read this file?
 g16dump extract JOB.mat --fch JOB.fch --reference ROHF --window 6 40 --out JOB.npz
 g16dump validate JOB.npz --hamiltonian     # builds h', checks E_ref against escf
 g16dump dump JOB.npz --out FCIDUMP          # + FCIDUMP.provenance.json
-g16dump rotate JOB.npz --rotation U.npy --out rotated.npz   # M4
+g16dump rotate JOB.npz --rotation U.npy --out rotated.npz
 ```
 
 `inspect` reports which of the blocks g16dump needs are present, under which
@@ -285,7 +327,7 @@ path raises; use the rebuilt-Fock path. This warning is repeated in the CLI.
 g16dump/      matfile.py   .mat -> .npz bundle (the only module importing QCMatEl)
               bundle.py    load/validate the .npz bundle, shape assertions
               hamiltonian.py   h', E_core, E_ref from Fock matrices
-              rotate.py    rotations inside the active space (seam, M4)
+              rotate.py    rotations inside the active space
               write.py     FCIDUMP writer
               cli.py       inspect / extract / validate / dump / rotate
 gaussian/     route templates + how to run them
@@ -327,7 +369,7 @@ Only `g16dump extract` (i.e. `matfile.py`) needs it.
 | M1 | test systems + two independent oracles | four `.npz` fixtures committed; `h'` and `E_core` checked against a full-transform route for RHF and ROHF; the wider oracle matrix (O2/NH, a KS set, the legacy regression) outstanding |
 | M2 | `bundle.py`, `hamiltonian.py`, `write.py` + gates | `bundle.py` and `hamiltonian.py` done, with the schema, electron-count, window, Hermiticity, orthonormality, ERI-symmetry and α/β gates |
 | M3 | writer and solver interface | writer done, round-tripped through an independent parser and through PySCF's; the Dice/Block2 examples are outstanding |
-| M4 | active-space rotations | seam in place, not implemented |
+| M4 | active-space rotations | done, with the many-body spectrum checked before and after in a numpy-only FCI |
 | M5 | benchmarks | not started |
 | M6 | packaging, CI, DOI | in progress |
 
