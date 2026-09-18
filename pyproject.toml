@@ -10,12 +10,38 @@ readme = "README.md"
 requires-python = ">=3.9"
 # The core path is numpy only, by design. pyscf/mokit are validation-only and
 # are imported lazily by the rebuilt-Fock fallback; see README.
+#
+# This list is a contract, not a convenience: .github/scripts/check_core_deps.py
+# fails CI if anything but numpy ends up here, and the core CI job runs the whole
+# Gaussian-independent suite in an environment where pyscf, mokit and gauopen are
+# provably absent.
 dependencies = ["numpy>=1.20"]
+classifiers = [
+  "Development Status :: 2 - Pre-Alpha",
+  "Intended Audience :: Science/Research",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Scientific/Engineering :: Chemistry",
+]
 
 [project.optional-dependencies]
 # Oracles for the M1/M2 gates, and the rebuilt-Fock path for KS orbitals.
-validate = ["pyscf>=2.0", "mokit"]
+# pyscf is the only one of the three that is pip-installable, so it is the only
+# one CI can rely on.
+validate = ["pyscf>=2.0"]
 test = ["pytest>=7"]
+lint = ["ruff>=0.5"]
+# Everything CI installs for the oracle job, in one name.
+dev = ["g16dump[validate,test,lint]"]
+
+# mokit is NOT on PyPI and cannot go in an extra: it ships as a conda-forge
+# package or a source build. Install it separately when you need it, and mark
+# any test that requires it with @pytest.mark.mokit so CI deselects it. Same for
+# gauopen, which comes with the Gaussian distribution (@pytest.mark.gauopen).
 
 [project.scripts]
 g16dump = "g16dump.cli:main"
@@ -25,3 +51,24 @@ include = ["g16dump*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# Markers name an external thing the test needs. CI deselects the ones it cannot
+# or must not provide: the core job runs "not pyscf and not mokit and not
+# gauopen and not gaussian", the oracle job runs "not gauopen and not gaussian".
+# Nothing that requires Gaussian or gauopen ever runs in CI.
+markers = [
+  "pyscf: needs pyscf (the independent scientific oracle)",
+  "mokit: needs mokit, which is not pip-installable",
+  "gauopen: needs Gaussian's gauopen/QCMatEl module",
+  "gaussian: needs a real Gaussian binary or real .mat/.fch output",
+  "slow: takes long enough that it does not belong in the fast feedback loop",
+]
+
+[tool.ruff]
+line-length = 100
+# legacy/ is regression and reference material and is never reformatted or
+# relinted; it is kept exactly as it was received.
+extend-exclude = ["legacy"]
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "UP"]
