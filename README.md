@@ -1,5 +1,7 @@
 # g16dump
 
+[![CI](https://github.com/lgutsev/fcidump_exporter/actions/workflows/ci.yml/badge.svg)](https://github.com/lgutsev/fcidump_exporter/actions/workflows/ci.yml)
+
 FCIDUMP files for SHCI (Dice) and DMRG (Block2), built from a Gaussian 16
 matrix-element file without ever transforming integrals over the full MO space.
 
@@ -179,13 +181,16 @@ fixtures.
 
 ```bash
 pip install -e .                  # core: numpy only
-pip install -e ".[validate]"      # + pyscf, mokit for the oracles and fallback
+pip install -e ".[validate]"      # + pyscf, for the oracles and the fallback
 pip install -e ".[test]"          # + pytest
+pip install -e ".[dev]"           # + pyscf, pytest, ruff
 ```
 
-`gauopen` is **not** installable from PyPI and is **not** vendored here. Get it
-from Gaussian, Inc. (it ships with the Gaussian distribution as the `gauopen`
-directory), build its compiled component, and put it on `PYTHONPATH`:
+Neither `gauopen` nor `mokit` is on PyPI, so neither can appear in an extra.
+
+`gauopen` is **not** vendored here either. Get it from Gaussian, Inc. (it ships
+with the Gaussian distribution as the `gauopen` directory), build its compiled
+component, and put it on `PYTHONPATH`:
 
 ```bash
 export PYTHONPATH=/path/to/gauopen:$PYTHONPATH
@@ -193,6 +198,12 @@ python3 -c "import QCMatEl; print(QCMatEl.__file__)"
 ```
 
 Only `g16dump extract` (i.e. `matfile.py`) needs it.
+
+`mokit` comes from conda-forge or a source build, and only the rebuilt-Fock
+comparison path uses it. Nothing in CI does: CI runs the Gaussian-independent
+suite on Python 3.9 through 3.13 with numpy alone, and the PySCF oracles
+separately. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for how to mark a test that
+needs any of these.
 
 ## Project status
 
