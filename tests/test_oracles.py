@@ -54,7 +54,7 @@ pytestmark = pytest.mark.pyscf
 # Geometries and windows transcribed from benchmarks/systems/*.json. The window
 # is given as Gaussian's 1-based inclusive NFIRST/NLAST, which is how a user
 # writes it in a route line; the conversion to a 0-based half-open pair happens
-# once, in _build, and is asserted against the declared counts.
+# once, in Case.__init__, and is checked there against the bundle accessors.
 
 H2O_GEOMETRY = """
 O   0.0000000   0.0000000   0.1173000
@@ -77,32 +77,32 @@ O   0.0000000   0.0000000   1.2075000
 
 SYSTEMS = {
     "h2o_rhf": dict(
-        atom=H2O_GEOMETRY, basis="sto-3g", spin=0, reference="RHF",
+        atom=H2O_GEOMETRY, basis="sto-3g", spin=0, reference_type="RHF",
         nfirst=2, nlast=7, nbasis=7, nelec_active=8, rotate=False,
         note="closed shell, canonical orbitals; the case the legacy scripts got right",
     ),
     "ch2_rohf": dict(
-        atom=CH2_GEOMETRY, basis="6-31g", spin=2, reference="ROHF",
+        atom=CH2_GEOMETRY, basis="6-31g", spin=2, reference_type="ROHF",
         nfirst=2, nlast=13, nbasis=13, nelec_active=6, rotate=False,
         note="open-shell triplet; four active alpha and two active beta electrons",
     ),
     "nh_rohf": dict(
-        atom=NH_GEOMETRY, basis="6-31g", spin=2, reference="ROHF",
+        atom=NH_GEOMETRY, basis="6-31g", spin=2, reference_type="ROHF",
         nfirst=2, nlast=11, nbasis=11, nelec_active=6, rotate=False,
         note="a second open shell, with a different bonding pattern from CH2",
     ),
     "o2_rohf": dict(
-        atom=O2_GEOMETRY, basis="6-31g", spin=2, reference="ROHF",
+        atom=O2_GEOMETRY, basis="6-31g", spin=2, reference_type="ROHF",
         nfirst=3, nlast=12, nbasis=18, nelec_active=12, rotate=False,
         note="the only system with frozen virtuals as well as frozen core",
     ),
     "ch2_rohf_rotated": dict(
-        atom=CH2_GEOMETRY, basis="6-31g", spin=2, reference="ROHF",
+        atom=CH2_GEOMETRY, basis="6-31g", spin=2, reference_type="ROHF",
         nfirst=2, nlast=13, nbasis=13, nelec_active=6, rotate=True,
         note="the same determinant in rotated orbitals; the MO Fock is not diagonal",
     ),
     "h2o_rks": dict(
-        atom=H2O_GEOMETRY, basis="6-31g", spin=0, reference="RKS", xc="b3lyp",
+        atom=H2O_GEOMETRY, basis="6-31g", spin=0, reference_type="RKS", xc="b3lyp",
         nfirst=2, nlast=13, nbasis=13, nelec_active=8, rotate=False,
         note="Kohn-Sham orbitals, which are only usable through the rebuilt-Fock path",
     ),
@@ -111,7 +111,7 @@ SYSTEMS = {
 #: Systems whose reference determinant energy is the SCF energy of the job.
 #: The KS entry is excluded: its Hamiltonian is the HF Hamiltonian evaluated in
 #: KS orbitals, which is a different and deliberately larger number.
-HARTREE_FOCK = [name for name, s in SYSTEMS.items() if s["reference"] != "RKS"]
+HARTREE_FOCK = [name for name, s in SYSTEMS.items() if s["reference_type"] != "RKS"]
 OPEN_SHELL = [name for name, s in SYSTEMS.items() if s["spin"] != 0]
 
 
@@ -276,7 +276,7 @@ class Case:
         mol = gto.M(
             atom=spec["atom"], basis=spec["basis"], spin=spec["spin"], verbose=0
         )
-        if spec["reference"] == "RKS":
+        if spec["reference_type"] == "RKS":
             mf = dft.RKS(mol)
             mf.xc = spec["xc"]
             mf.conv_tol = 1e-12
@@ -289,9 +289,15 @@ class Case:
 
         mo = np.asarray(mf.mo_coeff)
         nalpha, nbeta = (int(n) for n in mol.nelec)
-        # The one place the 1-based inclusive route window becomes a 0-based
-        # half-open pair. Nothing else in this module does index arithmetic.
-        act_start, act_stop = spec["nfirst"] - 1, spec["nlast"]
+        # The bundle stores the window the way a Gaussian route line states it,
+        # 1-based and inclusive. This is the one place in the module that turns
+        # it into the 0-based half-open pair a NumPy slice wants, and the
+        # conversion is checked against the bundle's own accessors below rather
+        # than trusted. An off-by-one here raises nothing: it would quietly drop
+        # the first active orbital, pick up a virtual in its place, and build a
+        # perfectly self-consistent Hamiltonian for the wrong active space.
+        active_first, active_last = spec["nfirst"], spec["nlast"]
+        act_start, act_stop = active_first - 1, active_last
 
         self.canonical_mo = mo
         self.orbital_energies = np.asarray(mf.mo_energy, dtype=float).ravel()
@@ -306,10 +312,10 @@ class Case:
         self.mol, self.mf, self.mo = mol, mf, mo
         self.nalpha, self.nbeta = nalpha, nbeta
         self.act_start, self.act_stop = act_start, act_stop
-        self.e_scf = float(mf.e_tot)
+        self.escf = float(mf.e_tot)
 
         self.bundle = Bundle(
-            reference=spec["reference"],
+            reference_type=spec["reference_type"],
             charge=int(mol.charge),
             multiplicity=int(mol.spin) + 1,
             nelec=nalpha + nbeta,
@@ -319,35 +325,45 @@ class Case:
             nmo=mo.shape[1],
             ncore=act_start,
             nact=act_stop - act_start,
-            act_start=act_start,
-            act_stop=act_stop,
-            e_nuc=float(mol.energy_nuc()),
-            mo_coeff=mo,
-            overlap=np.asarray(mf.get_ovlp()),
-            hcore_ao=hcore_ao,
-            eri_act=_windowed_eri(mol, mo, act_start, act_stop),
+            active_first=active_first,
+            active_last=active_last,
+            enuc=float(mol.energy_nuc()),
+            C=mo,
+            S=np.asarray(mf.get_ovlp()),
+            Hcore_ao=hcore_ao,
+            eri_active=_windowed_eri(mol, mo, act_start, act_stop),
+            source_program="pyscf",
+            source_file="tests/test_oracles.py",
             fock_source="pyscf_rebuilt",
-            fock_ao_alpha=fock_a,
-            fock_ao_beta=fock_b,
+            F_alpha_ao=fock_a,
+            F_beta_ao=fock_b,
             atom_charges=mol.atom_charges().astype(float),
-            e_scf=float(mf.e_tot),
+            escf=float(mf.e_tot),
             provenance=make_provenance(
                 basis=spec["basis"],
-                method=spec["reference"],
+                method=spec["reference_type"],
                 window_1based=(spec["nfirst"], spec["nlast"]),
                 fock_source="pyscf_rebuilt",
                 extra={"generated_by": "tests/test_oracles.py", "note": spec["note"]},
             ),
         )
 
+        # The window arithmetic above has to agree with the accessors the rest
+        # of the package indexes through. If the stored convention ever changes
+        # again, this fails here rather than silently shifting every window.
+        assert self.bundle.active_start == act_start
+        assert self.bundle.active_stop == act_stop
+        assert self.bundle.active == slice(act_start, act_stop)
+        assert self.bundle.core == slice(0, act_start)
+
         # -- the oracle route, from the full transform down ------------------
         hcore_mo = _oracle_to_mo(hcore_ao, mo)
         eri_full = _full_eri(mol, mo)
-        window = slice(act_start, act_stop)
+        window = self.bundle.active
 
         self.oracle_h_eff, self.oracle_e_core = _oracle_frozen_core(
-            hcore_mo, eri_full, float(mol.energy_nuc()), act_start,
-            act_start, act_stop,
+            hcore_mo, eri_full, float(mol.energy_nuc()), self.bundle.ncore,
+            self.bundle.active_start, self.bundle.active_stop,
         )
         self.oracle_eri_active = eri_full[window, window, window, window]
         self.oracle_e_ref = _oracle_determinant_energy(
@@ -355,7 +371,7 @@ class Case:
         )
         self.oracle_e_act = _oracle_determinant_energy(
             self.oracle_h_eff, self.oracle_eri_active,
-            nalpha - act_start, nbeta - act_start,
+            self.bundle.nocc_active_alpha, self.bundle.nocc_active_beta,
         )
 
         # -- the production route --------------------------------------------
@@ -392,7 +408,7 @@ def test_the_system_is_the_one_the_manifest_describes(case, name):
     spec = SYSTEMS[name]
     assert c.bundle.nao == spec["nbasis"], "basis set size"
     assert c.bundle.multiplicity == spec["spin"] + 1
-    active_electrons = c.bundle.nocc_act_alpha + c.bundle.nocc_act_beta
+    active_electrons = c.bundle.nocc_active_alpha + c.bundle.nocc_active_beta
     assert active_electrons == spec["nelec_active"], "active electron count"
     assert c.bundle.nelec == int(sum(c.mol.atom_charges())) - c.bundle.charge
     # Valid on its own terms, so a later failure is about the algebra and not
@@ -423,7 +439,7 @@ def test_active_eris_match_the_oracle(case, name):
     """The windowed transform equals the active block of the full transform."""
     c = case(name)
     np.testing.assert_allclose(
-        c.result.eri_act, c.oracle_eri_active, atol=1e-10,
+        c.result.eri_active, c.oracle_eri_active, atol=1e-10,
         err_msg=f"{name}: windowed ERIs disagree with the full transform",
     )
 
@@ -471,9 +487,9 @@ def test_reference_energy_reproduces_the_scf_energy(case, name):
     nothing in common with either of the two routes being compared.
     """
     c = case(name)
-    assert c.result.e_ref == pytest.approx(c.e_scf, abs=1e-8), (
+    assert c.result.e_ref == pytest.approx(c.escf, abs=1e-8), (
         f"{name}: E_ref = {c.result.e_ref:.10f} but the SCF converged to "
-        f"{c.e_scf:.10f}"
+        f"{c.escf:.10f}"
     )
 
 
@@ -486,7 +502,7 @@ def test_the_alpha_and_beta_routes_agree_on_open_shell_systems(case, name):
     matrix is informative rather than tautological.
     """
     c = case(name)
-    assert c.bundle.nocc_act_alpha != c.bundle.nocc_act_beta, (
+    assert c.bundle.nocc_active_alpha != c.bundle.nocc_active_beta, (
         f"{name} would not exercise the check: equal active occupations"
     )
     assert c.result.spin_deviation < 1e-9, (
@@ -507,8 +523,8 @@ def test_canonical_rhf_reduces_to_the_legacy_closed_shell_expression(case):
     """
     c = case("h2o_rhf")
     legacy = _legacy_closed_shell_h1(
-        c.orbital_energies, c.bundle.eri_act, c.act_start, c.act_stop,
-        c.bundle.nocc_act_alpha,
+        c.orbital_energies, c.bundle.eri_active, c.act_start, c.act_stop,
+        c.bundle.nocc_active_alpha,
     )
     # Loose against machine precision on purpose: a converged SCF still leaves
     # MO Fock off-diagonals of the order of its own convergence threshold.
@@ -526,7 +542,7 @@ def test_the_legacy_expression_fails_on_noncanonical_orbitals(case):
     """
     c = case("ch2_rohf_rotated")
 
-    fock_mo = _oracle_to_mo(c.bundle.fock_ao_alpha, c.mo)
+    fock_mo = _oracle_to_mo(c.bundle.F_alpha_ao, c.mo)
     off_diagonal = float(
         np.max(np.abs(fock_mo - np.diag(np.diag(fock_mo))))
     )
@@ -536,15 +552,15 @@ def test_the_legacy_expression_fails_on_noncanonical_orbitals(case):
     )
 
     # The new route is unharmed.
-    assert c.result.e_ref == pytest.approx(c.e_scf, abs=1e-8)
+    assert c.result.e_ref == pytest.approx(c.escf, abs=1e-8)
     np.testing.assert_allclose(c.result.h_eff, c.oracle_h_eff, atol=1e-10)
 
     # The legacy one is not. No diagonal matrix can equal this Fock matrix, so
     # the failure does not depend on which orbital energies are stored with the
     # rotated orbitals.
     legacy = _legacy_closed_shell_h1(
-        c.orbital_energies, c.bundle.eri_act, c.act_start, c.act_stop,
-        c.bundle.nocc_act_beta,
+        c.orbital_energies, c.bundle.eri_active, c.act_start, c.act_stop,
+        c.bundle.nocc_active_beta,
     )
     discrepancy = float(np.max(np.abs(c.result.h_eff - legacy)))
     assert discrepancy > 0.1, (
@@ -563,11 +579,11 @@ def test_the_legacy_expression_also_fails_on_canonical_rohf(case):
     """
     c = case("ch2_rohf")
     legacy = _legacy_closed_shell_h1(
-        c.orbital_energies, c.bundle.eri_act, c.act_start, c.act_stop,
-        c.bundle.nocc_act_beta,
+        c.orbital_energies, c.bundle.eri_active, c.act_start, c.act_stop,
+        c.bundle.nocc_active_beta,
     )
     assert float(np.max(np.abs(c.result.h_eff - legacy))) > 0.1
-    assert c.result.e_ref == pytest.approx(c.e_scf, abs=1e-8)
+    assert c.result.e_ref == pytest.approx(c.escf, abs=1e-8)
 
 
 def test_gaussians_roothaan_operator_is_rejected_rather_than_averaged(case):
@@ -582,7 +598,7 @@ def test_gaussians_roothaan_operator_is_rejected_rather_than_averaged(case):
     c = case("ch2_rohf")
     roothaan = np.asarray(c.mf.get_fock())
     bundle = replace(
-        c.bundle, fock_ao_alpha=roothaan, fock_ao_beta=roothaan.copy(),
+        c.bundle, F_alpha_ao=roothaan, F_beta_ao=roothaan.copy(),
         fock_source="gaussian",
     )
     with pytest.raises(H.SpinConsistencyError) as excinfo:
@@ -607,7 +623,7 @@ def test_kohn_sham_orbitals_give_the_hf_hamiltonian_not_the_ks_one(case):
     """
     c = case("h2o_rks")
     assert c.result.e_ref == pytest.approx(c.oracle_e_ref, abs=1e-8)
-    assert abs(c.result.e_ref - c.e_scf) > 0.1, (
+    assert abs(c.result.e_ref - c.escf) > 0.1, (
         "the reference energy equals the Kohn-Sham SCF energy, so the "
         "Hamiltonian is not the HF one"
     )
@@ -626,8 +642,8 @@ def test_the_stored_ks_matrix_would_have_been_materially_wrong(case):
     c = case("h2o_rks")
     ks_matrix = np.asarray(c.mf.get_fock())
     disguised = replace(
-        c.bundle, reference="RHF", fock_ao_alpha=ks_matrix,
-        fock_ao_beta=ks_matrix.copy(), fock_source="gaussian",
+        c.bundle, reference_type="RHF", F_alpha_ao=ks_matrix,
+        F_beta_ao=ks_matrix.copy(), fock_source="gaussian",
     )
     wrong = H.active_hamiltonian(disguised)
     assert abs(wrong.e_ref - c.result.e_ref) > 0.5, (
@@ -639,7 +655,7 @@ def test_the_stored_ks_matrix_would_have_been_materially_wrong(case):
     from g16dump.hamiltonian import HamiltonianError
 
     with pytest.raises(HamiltonianError, match="exchange-correlation"):
-        H.active_hamiltonian(replace(disguised, reference="RKS"))
+        H.active_hamiltonian(replace(disguised, reference_type="RKS"))
 
 
 def test_the_production_rebuild_agrees_with_the_fock_matrices_used_here(case):
@@ -651,10 +667,10 @@ def test_the_production_rebuild_agrees_with_the_fock_matrices_used_here(case):
     """
     c = case("h2o_rks")
     rebuilt_a, rebuilt_b = H.rebuild_fock(
-        c.mol, c.mo, c.nalpha, c.nbeta, c.bundle.hcore_ao
+        c.mol, c.mo, c.nalpha, c.nbeta, c.bundle.Hcore_ao
     )
-    np.testing.assert_allclose(rebuilt_a, c.bundle.fock_ao_alpha, atol=1e-10)
-    np.testing.assert_allclose(rebuilt_b, c.bundle.fock_ao_beta, atol=1e-10)
+    np.testing.assert_allclose(rebuilt_a, c.bundle.F_alpha_ao, atol=1e-10)
+    np.testing.assert_allclose(rebuilt_b, c.bundle.F_beta_ao, atol=1e-10)
 
     rebuilt_bundle = H.with_rebuilt_fock(c.bundle, c.mol)
     assert rebuilt_bundle.fock_source == "pyscf_rebuilt"

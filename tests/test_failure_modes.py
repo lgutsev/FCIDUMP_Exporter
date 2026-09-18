@@ -69,18 +69,18 @@ def test_transposed_coefficients_are_diagnosed_not_merely_refused(broken):
     """
     good = broken()
     with pytest.raises(BundleError) as excinfo:
-        validate(replace(good, mo_coeff=good.mo_coeff.T))
+        validate(replace(good, C=good.C.T))
     assert_actionable(excinfo, "row-wise", "column-wise", "transpose")
 
 
 def test_nonorthonormal_coefficients_report_how_far_off_they_are(broken):
     """Not a convention problem: these coefficients are wrong in either reading."""
     good = broken()
-    scrambled = good.mo_coeff.copy()
+    scrambled = good.C.copy()
     scrambled[:, 2] *= 1.7
     with pytest.raises(BundleError) as excinfo:
-        validate(replace(good, mo_coeff=scrambled))
-    assert_actionable(excinfo, "orthonormal", "overlap", "mo_coeff")
+        validate(replace(good, C=scrambled))
+    assert_actionable(excinfo, "MO coefficients", "not orthonormal", "overlap")
 
 
 # ------------------------------------------------------------ 2. the overlap
@@ -88,11 +88,11 @@ def test_nonorthonormal_coefficients_report_how_far_off_they_are(broken):
 def test_an_asymmetric_overlap_is_refused(broken):
     """``S`` is symmetric by construction; an asymmetric one is a reader bug."""
     good = broken()
-    bad = good.overlap.copy()
+    bad = good.S.copy()
     bad[0, 1] += 0.5
     with pytest.raises(BundleError) as excinfo:
-        validate(replace(good, overlap=bad))
-    assert_actionable(excinfo, "overlap", "symmetric")
+        validate(replace(good, S=bad))
+    assert_actionable(excinfo, "S is not symmetric")
 
 
 def test_an_overlap_that_is_not_positive_definite_is_refused(broken):
@@ -102,18 +102,18 @@ def test_an_overlap_that_is_not_positive_definite_is_refused(broken):
     whatever first tries to invert it.
     """
     good = broken()
-    eigenvalues, eigenvectors = np.linalg.eigh(good.overlap)
+    eigenvalues, eigenvectors = np.linalg.eigh(good.S)
     eigenvalues[0] = -1.0
     indefinite = eigenvectors @ np.diag(eigenvalues) @ eigenvectors.T
     with pytest.raises(BundleError) as excinfo:
-        validate(replace(good, overlap=indefinite))
-    assert_actionable(excinfo, "overlap", "positive definite")
+        validate(replace(good, S=indefinite))
+    assert_actionable(excinfo, "S is not positive definite", "overlap matrix")
 
 
 # ------------------------------------------- 3. non-Hermitian one-electron data
 
 @pytest.mark.parametrize(
-    "field", ["hcore_ao", "fock_ao_alpha", "fock_ao_beta"]
+    "field", ["Hcore_ao", "F_alpha_ao", "F_beta_ao"]
 )
 def test_non_hermitian_one_electron_matrices_are_refused(broken, field):
     """Every one of these is a Hermitian operator in a real basis.
@@ -176,7 +176,7 @@ def test_a_window_running_past_the_last_orbital(broken):
     """The commonest route-line mistake: NLAST copied from a bigger basis."""
     good = broken()
     with pytest.raises(BundleError) as excinfo:
-        validate(replace(good, act_stop=9, nact=8))
+        validate(replace(good, active_last=9, nact=8))
     assert_actionable(excinfo, "active window", "mos")
 
 
@@ -188,10 +188,23 @@ def test_a_frozen_core_count_that_disagrees_with_the_window(broken):
     assert_actionable(excinfo, "ncore", "window", "frozen core")
 
 
+def test_a_zero_based_window_is_caught_as_such(broken):
+    """The window is 1-based; a 0 in ``active_first`` means someone converted.
+
+    This is the specific shape of the version-1 mistake, and the one a caller
+    is most likely to make by hand, so the message says which convention the
+    field is in rather than only that the value is out of range.
+    """
+    good = broken()
+    with pytest.raises(BundleError) as excinfo:
+        validate(replace(good, active_first=0, ncore=0, nact=5))
+    assert_actionable(excinfo, "active_first", "1-based", "first mo is 1")
+
+
 def test_an_empty_window_is_refused(broken):
     good = broken()
     with pytest.raises(BundleError) as excinfo:
-        validate(replace(good, act_start=4, act_stop=4, nact=0, ncore=4))
+        validate(replace(good, active_first=5, active_last=4, nact=0, ncore=4))
     assert_actionable(excinfo, "active window", "empty")
 
 
@@ -203,8 +216,8 @@ def test_an_occupied_orbital_frozen_as_a_virtual(broken):
     """
     good = broken()
     with pytest.raises(BundleError) as excinfo:
-        validate(replace(good, act_stop=2, nact=1, mo_energy_alpha=None,
-                         eri_act=np.zeros((1, 1, 1, 1))))
+        validate(replace(good, active_last=2, nact=1, orbital_energies=None,
+                         eri_active=np.zeros((1, 1, 1, 1))))
     assert_actionable(excinfo, "alpha electrons", "window")
 
 
@@ -228,16 +241,16 @@ def test_an_eri_tensor_of_the_wrong_size_names_the_dimension_it_wanted(broken):
     """
     good = broken()
     with pytest.raises(BundleError) as excinfo:
-        validate(replace(good, eri_act=np.zeros((3, 3, 3, 3))))
-    assert_actionable(excinfo, "eri_act", "shape", "expected")
+        validate(replace(good, eri_active=np.zeros((3, 3, 3, 3))))
+    assert_actionable(excinfo, "eri_active", "shape", "expected")
 
 
 def test_an_eri_tensor_of_the_wrong_rank_is_refused(broken):
     """A flat or half-unpacked block, which is how a packed record arrives."""
     good = broken()
     with pytest.raises(BundleError) as excinfo:
-        validate(replace(good, eri_act=np.zeros((4, 4))))
-    assert_actionable(excinfo, "eri_act", "shape")
+        validate(replace(good, eri_active=np.zeros((4, 4))))
+    assert_actionable(excinfo, "eri_active", "shape")
 
 
 @pytest.mark.parametrize(
@@ -258,14 +271,14 @@ def test_each_permutational_symmetry_generator_is_checked(
     real unpacking bug: a transposed index pair, a swapped bra and ket.
     """
     good = broken()
-    corrupted = np.array(good.eri_act, copy=True)
+    corrupted = np.array(good.eri_active, copy=True)
     corrupted += 0.05 * (
         np.arange(corrupted.size).reshape(corrupted.shape)
         - np.arange(corrupted.size).reshape(corrupted.shape).transpose(transpose)
     )
     with pytest.raises(BundleError) as excinfo:
-        validate(replace(good, eri_act=corrupted))
-    assert_actionable(excinfo, "eri_act", generator)
+        validate(replace(good, eri_active=corrupted))
+    assert_actionable(excinfo, "eri_active", generator)
 
 
 # ------------------------------------------------------- 7. the Fock matrices
@@ -277,7 +290,7 @@ def test_no_fock_matrix_at_all_names_the_way_out(fixture_path):
     message has to name it.
     """
     bundle = replace(
-        load(fixture_path("h2o_rhf")), fock_ao_alpha=None, fock_ao_beta=None,
+        load(fixture_path("h2o_rhf")), F_alpha_ao=None, F_beta_ao=None,
         fock_source="none",
     )
     with pytest.raises(HamiltonianError) as excinfo:
@@ -292,7 +305,7 @@ def test_an_open_shell_bundle_missing_its_beta_fock_matrix(fixture_path):
     matrix with itself, which is the one thing that would disarm the gate
     without any visible symptom.
     """
-    bundle = replace(load(fixture_path("ch2_rohf")), fock_ao_beta=None)
+    bundle = replace(load(fixture_path("ch2_rohf")), F_beta_ao=None)
     with pytest.raises(HamiltonianError) as excinfo:
         H.active_hamiltonian(bundle)
     assert_actionable(excinfo, "beta fock", "open-shell")
@@ -300,10 +313,10 @@ def test_an_open_shell_bundle_missing_its_beta_fock_matrix(fixture_path):
 
 def test_a_closed_shell_bundle_may_omit_its_beta_fock_matrix(fixture_path):
     """The complement: when the two are equal, omitting one is not an error."""
-    bundle = replace(load(fixture_path("h2o_rhf")), fock_ao_beta=None)
+    bundle = replace(load(fixture_path("h2o_rhf")), F_beta_ao=None)
     assert bundle.nalpha == bundle.nbeta
     result = H.active_hamiltonian(bundle)
-    assert result.e_ref == pytest.approx(bundle.e_scf, abs=1e-8)
+    assert result.e_ref == pytest.approx(bundle.escf, abs=1e-8)
 
 
 def test_a_stored_fock_matrix_with_no_recorded_source(broken):
@@ -317,8 +330,8 @@ def test_a_stored_fock_matrix_with_no_recorded_source(broken):
 def test_a_recorded_source_with_no_stored_fock_matrix(broken):
     good = broken()
     with pytest.raises(BundleError) as excinfo:
-        validate(replace(good, fock_ao_alpha=None, fock_ao_beta=None))
-    assert_actionable(excinfo, "fock_source", "fock_ao_alpha")
+        validate(replace(good, F_alpha_ao=None, F_beta_ao=None))
+    assert_actionable(excinfo, "fock_source", "F_alpha_ao")
 
 
 # --------------------------------- 8. the alpha/beta consistency failure itself
@@ -366,8 +379,8 @@ def test_a_disagreeing_pair_is_never_quietly_averaged(fixture_path):
     bundle = load(fixture_path("ch2_rohf_roothaan"))
     fock_a, fock_b = H.mo_fock_matrices(bundle)
     from_alpha, from_beta = H.effective_one_electron(
-        fock_a, fock_b, bundle.eri_act, bundle.active,
-        bundle.nocc_act_alpha, bundle.nocc_act_beta,
+        fock_a, fock_b, bundle.eri_active, bundle.active,
+        bundle.nocc_active_alpha, bundle.nocc_active_beta,
     )
     mean = 0.5 * (from_alpha + from_beta)
     result = H.active_hamiltonian(bundle, spin_tol=1e3)
@@ -381,7 +394,7 @@ def test_a_ks_bundle_carrying_a_gaussian_fock_matrix_is_refused(broken):
     """Caught at validation, before anything reads the matrix."""
     good = broken()
     with pytest.raises(BundleError) as excinfo:
-        validate(replace(good, reference="RKS"))
+        validate(replace(good, reference_type="RKS"))
     assert_actionable(excinfo, "kohn-sham", "exchange-correlation", "rebuilt")
 
 
@@ -393,7 +406,7 @@ def test_ks_orbitals_reaching_the_algebra_with_a_stored_fock_are_refused(broken)
     """
     good = broken()
     with pytest.raises(HamiltonianError) as excinfo:
-        H.active_hamiltonian(replace(good, reference="RKS", fock_source="gaussian"))
+        H.active_hamiltonian(replace(good, reference_type="RKS", fock_source="gaussian"))
     assert_actionable(
         excinfo, "exchange-correlation", "not the hf fock", "rebuild_fock"
     )
@@ -403,21 +416,23 @@ def test_an_unknown_reference_type_is_refused_rather_than_guessed(broken):
     """Reference types are never inferred; an unrecognised one stops the run."""
     good = broken()
     with pytest.raises(BundleError) as excinfo:
-        validate(replace(good, reference="UHF"))
+        validate(replace(good, reference_type="UHF"))
     assert_actionable(excinfo, "reference", "never inferred")
 
 
 # ------------------------------------------------------ 10. the file on disk
 
-@pytest.mark.parametrize("version", [0, 2, 99])
+@pytest.mark.parametrize("version", [1, 3, 99])
 def test_a_bundle_of_another_schema_version_is_refused(synthetic, tmp_path, version):
-    """Version 1 is what this code speaks; anything else is a different format.
+    """Version 2 is what this code speaks; anything else is a different format.
 
-    Not a warning. A bundle from another schema may have the same key names
-    with different meanings -- a window that is 1-based rather than 0-based,
-    say -- and reading it as though it were this schema would produce a
-    Hamiltonian for the wrong active space without any array being the wrong
-    shape.
+    Version 1 is not hypothetical. Bundles written before the field rename are
+    still on disk, and they store the active window 0-based and half-open where
+    version 2 stores it 1-based and inclusive. Nothing about such a file is the
+    wrong shape: read as version 2 it would silently drop the first active
+    orbital, take a virtual in its place, and produce a Hamiltonian for an
+    active space nobody asked for. Refusing on the version is the only thing
+    standing between that file and a plausible wrong answer.
     """
     path = save(synthetic, tmp_path / "bundle.npz")
     payload = dict(np.load(path, allow_pickle=False))
@@ -444,7 +459,7 @@ def test_a_bundle_with_no_schema_version_at_all(synthetic, tmp_path):
 def test_a_truncated_bundle_lists_every_key_it_is_missing(synthetic, tmp_path):
     """Named all at once, so a truncated file takes one round trip to diagnose."""
     path = save(synthetic, tmp_path / "bundle.npz")
-    dropped = {"overlap", "hcore_ao", "nalpha"}
+    dropped = {"S", "Hcore_ao", "nalpha"}
     payload = {k: v for k, v in np.load(path, allow_pickle=False).items()
                if k not in dropped}
     np.savez_compressed(path, **payload)
@@ -486,25 +501,25 @@ def test_a_bundle_round_trips_through_a_corrupted_provenance_unchanged(synthetic
 #: Every corruption above, as (label, mutation) pairs. The individual tests
 #: assert what each message says; this table asserts what none of them may be.
 CORRUPTIONS = [
-    ("transposed coefficients", lambda b: dict(mo_coeff=b.mo_coeff.T)),
-    ("asymmetric overlap", lambda b: dict(overlap=b.overlap + np.triu(
-        np.ones_like(b.overlap), 1))),
-    ("non-Hermitian hcore", lambda b: dict(hcore_ao=b.hcore_ao + np.triu(
-        np.ones_like(b.hcore_ao), 1))),
+    ("transposed coefficients", lambda b: dict(C=b.C.T)),
+    ("asymmetric overlap", lambda b: dict(S=b.S + np.triu(
+        np.ones_like(b.S), 1))),
+    ("non-Hermitian hcore", lambda b: dict(Hcore_ao=b.Hcore_ao + np.triu(
+        np.ones_like(b.Hcore_ao), 1))),
     ("electron count", lambda b: dict(nelec=7)),
     ("impossible multiplicity", lambda b: dict(multiplicity=2)),
     ("window contradicts nact", lambda b: dict(nact=2)),
-    ("window past the last MO", lambda b: dict(act_stop=99)),
-    ("eri of the wrong size", lambda b: dict(eri_act=np.zeros((2, 2, 2, 2)))),
-    ("eri of the wrong rank", lambda b: dict(eri_act=np.zeros(16))),
+    ("window past the last MO", lambda b: dict(active_last=99)),
+    ("eri of the wrong size", lambda b: dict(eri_active=np.zeros((2, 2, 2, 2)))),
+    ("eri of the wrong rank", lambda b: dict(eri_active=np.zeros(16))),
     ("eri symmetry broken", lambda b: dict(
-        eri_act=b.eri_act + np.arange(b.eri_act.size).reshape(b.eri_act.shape))),
+        eri_active=b.eri_active + np.arange(b.eri_active.size).reshape(b.eri_active.shape))),
     ("mo_coeff of the wrong shape", lambda b: dict(
-        mo_coeff=np.zeros((b.nao, b.nmo + 1)))),
-    ("unknown reference", lambda b: dict(reference="CASSCF")),
-    ("KS with a stored Fock", lambda b: dict(reference="ROKS")),
+        C=np.zeros((b.nao, b.nmo + 1)))),
+    ("unknown reference", lambda b: dict(reference_type="CASSCF")),
+    ("KS with a stored Fock", lambda b: dict(reference_type="ROKS")),
     ("non-finite integrals", lambda b: dict(
-        hcore_ao=np.full_like(b.hcore_ao, np.nan))),
+        Hcore_ao=np.full_like(b.Hcore_ao, np.nan))),
 ]
 
 
