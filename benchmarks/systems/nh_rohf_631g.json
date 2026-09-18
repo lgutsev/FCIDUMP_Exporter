@@ -1,0 +1,52 @@
+{
+  "schema_version": "1.0",
+  "id": "nh_rohf_631g",
+  "tier": 0,
+  "role": "validation",
+  "status": "ready",
+  "title": "NH triplet, ROHF/6-31G, full valence window",
+  "description": "A second open-shell reference with a different bonding pattern from CH2: two electrons in a degenerate pi pair rather than a sigma/pi pair on a bent centre.",
+  "spin_family": "nh_631g",
+  "molecule": {
+    "charge": 0,
+    "multiplicity": 3,
+    "geometry": {
+      "units": "angstrom",
+      "comment": "Near-equilibrium N-H bond length, 1.0362 A.",
+      "xyz": "N   0.0000000   0.0000000   0.0000000\nH   0.0000000   0.0000000   1.0362000"
+    }
+  },
+  "reference": {
+    "type": "ROHF",
+    "basis": "6-31G",
+    "expected_nbasis": 11,
+    "fock_source": "gaussian",
+    "scf": {
+      "conver": 10
+    }
+  },
+  "active_space": {
+    "window": {
+      "nfirst_1based": 2,
+      "nlast_1based": 11
+    },
+    "frozen_core": 1,
+    "n_orbitals": 10,
+    "n_electrons": 6,
+    "ms2": 2
+  },
+  "solver": {
+    "kind": "pyscf_fci",
+    "parameters": {},
+    "convergence": {
+      "conv_tol": 1e-10,
+      "max_cycle": 200
+    },
+    "notes": "Small enough for exact diagonalisation, so this entry doubles as the truth source for the solver adapters."
+  },
+  "provenance": {
+    "added": "2026-09-18",
+    "geometry_source": "Idealised diatomic at the near-equilibrium bond length; not optimised at this level of theory.",
+    "basis_source": "Gaussian internal 6-31G."
+  }
+}

@@ -1,0 +1,90 @@
+{
+  "schema_version": "1.0",
+  "id": "nicl4_td_singlet",
+  "tier": 1,
+  "role": "ligand_field",
+  "status": "ready",
+  "title": "[NiCl4]2- tetrahedral, singlet, RHF/def2-SVP",
+  "description": "Ni(II) is d8. In a tetrahedral field the triplet is the ground state and in a square-planar field the singlet is, so the singlet-triplet splitting changes sign between the two geometries. Same ligands and the same basis in both, so geometry is the only variable. This entry is the expected excited state at this geometry.",
+  "spin_family": "nicl4_td",
+  "molecule": {
+    "charge": -2,
+    "multiplicity": 1,
+    "geometry": {
+      "units": "angstrom",
+      "comment": "Td, Ni-Cl 2.27 A.",
+      "xyz": "Ni   0.0000000   0.0000000   0.0000000\nCl   1.3105851   1.3105851   1.3105851\nCl   1.3105851  -1.3105851  -1.3105851\nCl  -1.3105851   1.3105851  -1.3105851\nCl  -1.3105851  -1.3105851   1.3105851"
+    }
+  },
+  "reference": {
+    "type": "RHF",
+    "basis": "def2SVP",
+    "spherical_d": true,
+    "fock_source": "gaussian",
+    "scf": {
+      "conver": 10
+    }
+  },
+  "active_space": {
+    "window_policy": {
+      "reference_orbital": "homo",
+      "n_below": 7,
+      "n_above": 3,
+      "sweep": [
+        {
+          "n_below": 4,
+          "n_above": 1,
+          "label": "metal 3d only"
+        },
+        {
+          "n_below": 7,
+          "n_above": 3,
+          "label": "3d plus ligand sigma"
+        },
+        {
+          "n_below": 11,
+          "n_above": 6,
+          "label": "3d, ligand sigma and pi"
+        },
+        {
+          "n_below": 15,
+          "n_above": 10,
+          "label": "extended"
+        }
+      ]
+    },
+    "n_orbitals": 11,
+    "notes": "Absolute MO indices are not known until a preliminary SCF has run, so the window is stated as a policy. Resolve it with the same NFIRST/NLAST for both spin states of this family, or the splitting compares two different Hamiltonians. Confirm the resolved window actually spans the Ni 3d block before trusting the numbers."
+  },
+  "solver": {
+    "kind": "dice",
+    "parameters": {
+      "schedule": [
+        [
+          0,
+          0.0001
+        ],
+        [
+          3,
+          1e-05
+        ]
+      ],
+      "sampleN": 200,
+      "DoRDM": true,
+      "noio": true
+    },
+    "convergence": {
+      "maxiter": 12,
+      "epsilon2": 1e-07,
+      "davidsonTol": 5e-05,
+      "dE": 1e-08,
+      "targetError": 8e-06
+    }
+  },
+  "provenance": {
+    "added": "2026-09-18",
+    "geometry_source": "Idealised tetrahedral model geometry built from a single Ni-Cl distance; not optimised.",
+    "basis_source": "Gaussian internal def2SVP.",
+    "notes": "A ligand-field model, not a structure from a crystal. Its value here is the sign of the splitting, not its magnitude."
+  }
+}

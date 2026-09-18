@@ -1,0 +1,80 @@
+{
+  "schema_version": "1.0",
+  "id": "feporph_legacy_triplet",
+  "tier": 3,
+  "role": "regression",
+  "status": "blocked",
+  "blocked_on": "The geometry these dumps were produced from is not in this repository. legacy/ has the FCIDUMP files and the Dice input but no .gjf, no .log and no coordinates. Supply the Fe-porphyrin geometry and this entry becomes runnable.",
+  "title": "Fe-porphyrin, triplet, legacy regression target",
+  "description": "The shipped legacy dump for this spin state. It is committed evidence of the bug, not a target to reproduce: the two legacy files put the ROHF triplet 0.67 Ha below the RHF singlet, which is impossible, and their core energies differ by 0.48 Ha. The regression is that a correct implementation must disagree with these numbers in a specific, explainable way.",
+  "spin_family": "feporph_legacy",
+  "molecule": {
+    "charge": 0,
+    "multiplicity": 3,
+    "geometry": {
+      "units": "angstrom"
+    }
+  },
+  "reference": {
+    "type": "ROHF",
+    "basis": "anoroostz",
+    "fock_source": "gaussian",
+    "scf": {
+      "conver": 10
+    }
+  },
+  "active_space": {
+    "window_policy": {
+      "reference_orbital": "homo",
+      "n_below": 10,
+      "n_above": 10
+    },
+    "n_orbitals": 21,
+    "n_electrons": 22,
+    "ms2": 2,
+    "notes": "NORB=21 and NELEC=22 are read off the header of the legacy dump. The window that produced them is not recorded anywhere in legacy/, so the policy here is a placeholder centred on the HOMO and must be replaced once the original Gaussian route is recovered."
+  },
+  "solver": {
+    "kind": "dice",
+    "parameters": {
+      "schedule": [
+        [
+          0,
+          0.0001
+        ],
+        [
+          3,
+          1e-05
+        ]
+      ],
+      "sampleN": 200,
+      "DoRDM": true,
+      "noio": true,
+      "nPTiter": 200
+    },
+    "convergence": {
+      "maxiter": 9,
+      "epsilon2": 1e-07,
+      "davidsonTol": 5e-05,
+      "dE": 1e-08,
+      "targetError": 8e-06
+    },
+    "notes": "Taken verbatim from legacy/input_back.dat, whose nocc line lists 22 orbitals and so belongs to these dumps."
+  },
+  "expected": {
+    "e_core_hartree": -2202.0083323975296,
+    "tolerance_hartree": 1e-08,
+    "trusted": false,
+    "source": "legacy/FePorph_3_Window.dat",
+    "notes": "Known wrong. This is the scalar core energy on the last line of the legacy dump, recorded so that a corrected run can be diffed against it rather than compared to nothing."
+  },
+  "provenance": {
+    "added": "2026-09-18",
+    "geometry_source": "Not available; see blocked_on.",
+    "basis_source": "ANO-RCC-style basis named 'anoroostz' in legacy/Template.py.",
+    "artifacts": [
+      "legacy/FePorph_3_Window.dat",
+      "legacy/input_back.dat"
+    ]
+  }
+}

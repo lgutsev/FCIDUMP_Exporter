@@ -1,0 +1,84 @@
+{
+  "schema_version": "1.0",
+  "id": "ni_porphine_singlet",
+  "tier": 2,
+  "role": "macrocycle",
+  "status": "ready",
+  "title": "Ni(II) porphine, singlet, RHF/def2-SVP",
+  "description": "The smallest real metalloporphyrin: the Ni-PAP complex with every substituent removed. This is where correlation first extends off the metal into the macrocycle, which is the effect the Ni-PAP work found and the reason the active-space sweeps in benchmarks/sweep.py exist.",
+  "spin_family": "ni_porphine",
+  "molecule": {
+    "charge": 0,
+    "multiplicity": 1,
+    "geometry": {
+      "units": "angstrom",
+      "file": "benchmarks/geometries/ni_porphine.xyz"
+    }
+  },
+  "reference": {
+    "type": "RHF",
+    "basis": "def2SVP",
+    "spherical_d": true,
+    "fock_source": "gaussian",
+    "scf": {
+      "conver": 10
+    }
+  },
+  "active_space": {
+    "window_policy": {
+      "reference_orbital": "homo",
+      "n_below": 9,
+      "n_above": 6,
+      "sweep": [
+        {
+          "n_below": 4,
+          "n_above": 1,
+          "label": "Ni 3d only"
+        },
+        {
+          "n_below": 9,
+          "n_above": 6,
+          "label": "3d plus the porphine frontier pi"
+        },
+        {
+          "n_below": 13,
+          "n_above": 10,
+          "label": "3d plus an extended pi set"
+        },
+        {
+          "n_below": 17,
+          "n_above": 14,
+          "label": "extended, DMRG territory"
+        }
+      ]
+    },
+    "n_orbitals": 16,
+    "notes": "The sweep here is the point of the entry: the Ni-PAP manuscript found correlation reaching past the nominal Ni 3d orbitals into the porphyrin framework, so the singlet-triplet splitting is expected to keep moving as the window grows. Use the same resolved window for both spin states."
+  },
+  "solver": {
+    "kind": "block2",
+    "parameters": {
+      "bond_dimension_schedule": [
+        250,
+        500,
+        1000,
+        1500
+      ],
+      "noise_schedule": [
+        0.0001,
+        1e-05,
+        1e-06,
+        0.0
+      ]
+    },
+    "convergence": {
+      "sweep_tol": 1e-07,
+      "max_sweeps": 30
+    }
+  },
+  "provenance": {
+    "added": "2026-09-18",
+    "geometry_source": "benchmarks/geometries/ni_porphine.xyz, an idealised D4h model built by benchmarks/geometries/build_ni_porphine.py from standard metalloporphine bond lengths. Not optimised; optimise before quoting any number from it.",
+    "basis_source": "Gaussian internal def2SVP."
+  }
+}

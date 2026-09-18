@@ -1,0 +1,89 @@
+{
+  "schema_version": "1.0",
+  "id": "ni_pap_full",
+  "tier": 4,
+  "role": "stress",
+  "status": "blocked",
+  "blocked_on": "The Ni-PAP geometry is not in this repository, and neither charge nor multiplicity is recorded anywhere that can be checked. legacy/Template.py carries spin = 2 and a Ni/N basis assignment with the geometry block left empty. Supply the structure and confirm the charge and spin state.",
+  "title": "Ni-PAP complex, the eventual stress test",
+  "description": "The molecule the original work was about. It is deliberately last: it is the case that proves the workflow scales, not the case the workflow is developed against. Everything above it should be passing before a run here is worth the queue time.",
+  "spin_family": "ni_pap",
+  "molecule": {
+    "charge": 0,
+    "multiplicity": 3,
+    "geometry": {
+      "units": "angstrom"
+    }
+  },
+  "reference": {
+    "type": "ROHF",
+    "basis": {
+      "Ni": "anoroostz",
+      "N": "anoroostz"
+    },
+    "fock_source": "gaussian",
+    "scf": {
+      "conver": 10
+    }
+  },
+  "active_space": {
+    "window_policy": {
+      "reference_orbital": "homo",
+      "n_below": 10,
+      "n_above": 10,
+      "sweep": [
+        {
+          "n_below": 4,
+          "n_above": 1,
+          "label": "Ni 3d only"
+        },
+        {
+          "n_below": 10,
+          "n_above": 10,
+          "label": "the legacy 21-orbital space"
+        },
+        {
+          "n_below": 16,
+          "n_above": 16,
+          "label": "extended into the macrocycle"
+        },
+        {
+          "n_below": 24,
+          "n_above": 24,
+          "label": "DMRG-only"
+        }
+      ]
+    },
+    "n_orbitals": 21,
+    "notes": "The 21-orbital step reproduces the active space legacy/Template.py used. The larger steps are the point: the manuscript reported state ordering changing when the active space or basis was expanded, so the sweep has to be run before any ordering here is quoted."
+  },
+  "solver": {
+    "kind": "dice",
+    "parameters": {
+      "schedule": [
+        [
+          0,
+          0.0009
+        ],
+        [
+          3,
+          0.0004
+        ]
+      ],
+      "sampleN": 200,
+      "DoRDM": true
+    },
+    "convergence": {
+      "maxiter": 12,
+      "epsilon2": 1e-08,
+      "targetError": 0.0004
+    },
+    "notes": "From legacy/input.dat, whose nocc line lists 16 orbitals."
+  },
+  "provenance": {
+    "added": "2026-09-18",
+    "geometry_source": "Not available; see blocked_on.",
+    "basis_source": "legacy/Template.py assigns 'anoroostz' to Ni and N.",
+    "notes": "The per-element basis here covers only the elements legacy/Template.py named. It has to be completed once the actual composition of the complex is known."
+  }
+}

@@ -1,0 +1,53 @@
+{
+  "schema_version": "1.0",
+  "id": "ch2_rohf_631g",
+  "tier": 0,
+  "role": "validation",
+  "status": "ready",
+  "title": "CH2 triplet, ROHF/6-31G, full valence window",
+  "description": "The smallest open-shell case, and the first entry where the legacy diag(orbital energies) expression is wrong for a reason other than noncanonical orbitals.",
+  "spin_family": "ch2_631g",
+  "molecule": {
+    "charge": 0,
+    "multiplicity": 3,
+    "geometry": {
+      "units": "angstrom",
+      "comment": "As in gaussian/probe_ch2_rohf.gjf.",
+      "xyz": "C   0.0000000   0.0000000   0.0000000\nH   0.9921000   0.0000000   0.4216000\nH  -0.9921000   0.0000000   0.4216000"
+    }
+  },
+  "reference": {
+    "type": "ROHF",
+    "basis": "6-31G",
+    "expected_nbasis": 13,
+    "fock_source": "gaussian",
+    "scf": {
+      "conver": 10
+    }
+  },
+  "active_space": {
+    "window": {
+      "nfirst_1based": 2,
+      "nlast_1based": 13
+    },
+    "frozen_core": 1,
+    "n_orbitals": 12,
+    "n_electrons": 6,
+    "ms2": 2,
+    "notes": "Four active alpha and two active beta electrons, so the alpha/beta consistency check on h_eff has something to catch."
+  },
+  "solver": {
+    "kind": "pyscf_fci",
+    "parameters": {},
+    "convergence": {
+      "conv_tol": 1e-10,
+      "max_cycle": 200
+    },
+    "notes": "Small enough for exact diagonalisation, so this entry doubles as the truth source for the solver adapters."
+  },
+  "provenance": {
+    "added": "2026-09-18",
+    "geometry_source": "gaussian/probe_ch2_rohf.gjf, the committed M0 probe job.",
+    "basis_source": "Gaussian internal 6-31G."
+  }
+}

@@ -1,0 +1,58 @@
+{
+  "schema_version": "1.0",
+  "id": "ch2_rohf_631g_rotated",
+  "tier": 0,
+  "role": "validation",
+  "status": "ready",
+  "title": "CH2 triplet, ROHF/6-31G, deliberately rotated active orbitals",
+  "description": "The same job as ch2_rohf_631g with a fixed random orthogonal rotation applied inside the active window, so the MO Fock matrix is not diagonal. This is the entry the legacy diag(orbital energies) expression cannot reproduce, and the spectrum must be identical to the unrotated one.",
+  "spin_family": "ch2_631g",
+  "molecule": {
+    "charge": 0,
+    "multiplicity": 3,
+    "geometry": {
+      "units": "angstrom",
+      "comment": "Identical to ch2_rohf_631g.",
+      "xyz": "C   0.0000000   0.0000000   0.0000000\nH   0.9921000   0.0000000   0.4216000\nH  -0.9921000   0.0000000   0.4216000"
+    }
+  },
+  "reference": {
+    "type": "ROHF",
+    "basis": "6-31G",
+    "expected_nbasis": 13,
+    "fock_source": "gaussian",
+    "scf": {
+      "conver": 10
+    },
+    "orbital_transform": {
+      "kind": "random_orthogonal",
+      "seed": 20260918
+    }
+  },
+  "active_space": {
+    "window": {
+      "nfirst_1based": 2,
+      "nlast_1based": 13
+    },
+    "frozen_core": 1,
+    "n_orbitals": 12,
+    "n_electrons": 6,
+    "ms2": 2,
+    "notes": "The rotation is applied to the bundle by 'g16dump rotate', not by Gaussian, so the .mat is shared with ch2_rohf_631g."
+  },
+  "solver": {
+    "kind": "pyscf_fci",
+    "parameters": {},
+    "convergence": {
+      "conv_tol": 1e-10,
+      "max_cycle": 200
+    },
+    "notes": "Small enough for exact diagonalisation, so this entry doubles as the truth source for the solver adapters."
+  },
+  "provenance": {
+    "added": "2026-09-18",
+    "geometry_source": "gaussian/probe_ch2_rohf.gjf, the committed M0 probe job.",
+    "basis_source": "Gaussian internal 6-31G.",
+    "notes": "Runs off the same Gaussian job as ch2_rohf_631g; only the post-extraction rotation differs."
+  }
+}

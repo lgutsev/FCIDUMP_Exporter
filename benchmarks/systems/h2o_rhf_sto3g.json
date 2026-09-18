@@ -1,0 +1,54 @@
+{
+  "schema_version": "1.0",
+  "id": "h2o_rhf_sto3g",
+  "tier": 0,
+  "role": "validation",
+  "status": "ready",
+  "title": "H2O, RHF/STO-3G, full valence window",
+  "description": "The smallest closed-shell case. Every quantity is cheap enough to obtain exactly, so this is where the frozen-core algebra is checked before anything else runs.",
+  "spin_family": "h2o_sto3g",
+  "molecule": {
+    "charge": 0,
+    "multiplicity": 1,
+    "geometry": {
+      "units": "angstrom",
+      "comment": "As in gaussian/probe_h2o_rhf.gjf.",
+      "xyz": "O   0.0000000   0.0000000   0.1173000\nH   0.0000000   0.7572000  -0.4692000\nH   0.0000000  -0.7572000  -0.4692000"
+    }
+  },
+  "reference": {
+    "type": "RHF",
+    "basis": "STO-3G",
+    "expected_nbasis": 7,
+    "fock_source": "gaussian",
+    "scf": {
+      "conver": 10
+    }
+  },
+  "active_space": {
+    "window": {
+      "nfirst_1based": 2,
+      "nlast_1based": 7
+    },
+    "frozen_core": 1,
+    "n_orbitals": 6,
+    "n_electrons": 8,
+    "ms2": 0,
+    "notes": "The O 1s is the only frozen orbital; nothing is frozen above the window."
+  },
+  "solver": {
+    "kind": "pyscf_fci",
+    "parameters": {},
+    "convergence": {
+      "conv_tol": 1e-10,
+      "max_cycle": 200
+    },
+    "notes": "Small enough for exact diagonalisation, so this entry doubles as the truth source for the solver adapters."
+  },
+  "provenance": {
+    "added": "2026-09-18",
+    "geometry_source": "gaussian/probe_h2o_rhf.gjf, the committed M0 probe job.",
+    "basis_source": "Gaussian internal STO-3G.",
+    "notes": "Deliberately identical to the M0 probe so the first real .mat available can be used here without a new Gaussian run."
+  }
+}

@@ -1,0 +1,54 @@
+{
+  "schema_version": "1.0",
+  "id": "h2o_rks_b3lyp_631g",
+  "tier": 0,
+  "role": "validation",
+  "status": "ready",
+  "title": "H2O, B3LYP/6-31G orbitals through the rebuilt-Fock path",
+  "description": "Kohn-Sham orbitals as an orbital source. The stored KS matrix carries exchange-correlation and is not the HF Fock operator, so this entry must go through the rebuilt-Fock path and must fail loudly if it is sent to the stored-Fock path.",
+  "spin_family": "h2o_631g_ks",
+  "molecule": {
+    "charge": 0,
+    "multiplicity": 1,
+    "geometry": {
+      "units": "angstrom",
+      "comment": "Identical to h2o_rhf_sto3g.",
+      "xyz": "O   0.0000000   0.0000000   0.1173000\nH   0.0000000   0.7572000  -0.4692000\nH   0.0000000  -0.7572000  -0.4692000"
+    }
+  },
+  "reference": {
+    "type": "RKS",
+    "functional": "B3LYP",
+    "basis": "6-31G",
+    "expected_nbasis": 13,
+    "fock_source": "pyscf_rebuilt",
+    "scf": {
+      "conver": 10
+    }
+  },
+  "active_space": {
+    "window": {
+      "nfirst_1based": 2,
+      "nlast_1based": 13
+    },
+    "frozen_core": 1,
+    "n_orbitals": 12,
+    "n_electrons": 8,
+    "ms2": 0
+  },
+  "solver": {
+    "kind": "pyscf_fci",
+    "parameters": {},
+    "convergence": {
+      "conv_tol": 1e-10,
+      "max_cycle": 200
+    },
+    "notes": "Small enough for exact diagonalisation, so this entry doubles as the truth source for the solver adapters."
+  },
+  "provenance": {
+    "added": "2026-09-18",
+    "geometry_source": "gaussian/probe_h2o_rhf.gjf, the committed M0 probe job.",
+    "basis_source": "Gaussian internal 6-31G.",
+    "notes": "The correlated energy here is not expected to match the RHF-orbital result; what is being checked is that the Hamiltonian is the HF Hamiltonian in KS orbitals, not a KS Hamiltonian."
+  }
+}

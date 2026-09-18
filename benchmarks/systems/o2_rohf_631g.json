@@ -1,0 +1,53 @@
+{
+  "schema_version": "1.0",
+  "id": "o2_rohf_631g",
+  "tier": 0,
+  "role": "validation",
+  "status": "ready",
+  "title": "O2 triplet, ROHF/6-31G, windowed with frozen virtuals",
+  "description": "The first entry whose window closes below the last orbital, so it exercises frozen virtuals as well as frozen core. Two frozen core orbitals rather than one.",
+  "spin_family": "o2_631g",
+  "molecule": {
+    "charge": 0,
+    "multiplicity": 3,
+    "geometry": {
+      "units": "angstrom",
+      "comment": "Near-equilibrium O-O bond length, 1.2075 A.",
+      "xyz": "O   0.0000000   0.0000000   0.0000000\nO   0.0000000   0.0000000   1.2075000"
+    }
+  },
+  "reference": {
+    "type": "ROHF",
+    "basis": "6-31G",
+    "expected_nbasis": 18,
+    "fock_source": "gaussian",
+    "scf": {
+      "conver": 10
+    }
+  },
+  "active_space": {
+    "window": {
+      "nfirst_1based": 3,
+      "nlast_1based": 12
+    },
+    "frozen_core": 2,
+    "n_orbitals": 10,
+    "n_electrons": 12,
+    "ms2": 2,
+    "notes": "Both O 1s frozen below the window and six virtuals frozen above it. The full-space oracle must apply the same double truncation."
+  },
+  "solver": {
+    "kind": "pyscf_fci",
+    "parameters": {},
+    "convergence": {
+      "conv_tol": 1e-10,
+      "max_cycle": 200
+    },
+    "notes": "Small enough for exact diagonalisation, so this entry doubles as the truth source for the solver adapters."
+  },
+  "provenance": {
+    "added": "2026-09-18",
+    "geometry_source": "Idealised diatomic at the near-equilibrium bond length; not optimised at this level of theory.",
+    "basis_source": "Gaussian internal 6-31G."
+  }
+}

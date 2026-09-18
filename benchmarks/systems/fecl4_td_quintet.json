@@ -1,0 +1,84 @@
+{
+  "schema_version": "1.0",
+  "id": "fecl4_td_quintet",
+  "tier": 1,
+  "role": "ligand_field",
+  "status": "ready",
+  "title": "[FeCl4]2- tetrahedral, quintet, ROHF/def2-SVP",
+  "description": "Fe(II) is d6, so in a tetrahedral field the high-spin quintet is the ground state and the singlet lies well above it. This is the entry that shows the workflow is not Ni-specific, and it spans a larger spin range than the d8 pairs.",
+  "spin_family": "fecl4_td",
+  "molecule": {
+    "charge": -2,
+    "multiplicity": 5,
+    "geometry": {
+      "units": "angstrom",
+      "comment": "Td, Fe-Cl 2.30 A.",
+      "xyz": "Fe   0.0000000   0.0000000   0.0000000\nCl   1.3279056   1.3279056   1.3279056\nCl   1.3279056  -1.3279056  -1.3279056\nCl  -1.3279056   1.3279056  -1.3279056\nCl  -1.3279056  -1.3279056   1.3279056"
+    }
+  },
+  "reference": {
+    "type": "ROHF",
+    "basis": "def2SVP",
+    "spherical_d": true,
+    "fock_source": "gaussian",
+    "scf": {
+      "conver": 10
+    }
+  },
+  "active_space": {
+    "window_policy": {
+      "reference_orbital": "homo",
+      "n_below": 7,
+      "n_above": 3,
+      "sweep": [
+        {
+          "n_below": 4,
+          "n_above": 1,
+          "label": "metal 3d only"
+        },
+        {
+          "n_below": 7,
+          "n_above": 3,
+          "label": "3d plus ligand sigma"
+        },
+        {
+          "n_below": 11,
+          "n_above": 6,
+          "label": "3d, ligand sigma and pi"
+        }
+      ]
+    },
+    "n_orbitals": 11,
+    "notes": "A quintet ROHF reference has four singly occupied orbitals, so the alpha/beta consistency check on h_eff is at its most informative here."
+  },
+  "solver": {
+    "kind": "dice",
+    "parameters": {
+      "schedule": [
+        [
+          0,
+          0.0001
+        ],
+        [
+          3,
+          1e-05
+        ]
+      ],
+      "sampleN": 200,
+      "DoRDM": true,
+      "noio": true
+    },
+    "convergence": {
+      "maxiter": 12,
+      "epsilon2": 1e-07,
+      "davidsonTol": 5e-05,
+      "dE": 1e-08,
+      "targetError": 8e-06
+    }
+  },
+  "provenance": {
+    "added": "2026-09-18",
+    "geometry_source": "Idealised tetrahedral model geometry built from a single Fe-Cl distance; not optimised.",
+    "basis_source": "Gaussian internal def2SVP."
+  }
+}
