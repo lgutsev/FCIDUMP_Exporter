@@ -255,33 +255,77 @@ def _run_dump(args) -> int:
 
 def _add_rotate(subparsers) -> None:
     parser = subparsers.add_parser(
-        "rotate", help="rotate a bundle's active space (M4, not implemented)"
+        "rotate",
+        help="rotate a bundle's active space",
+        description=(
+            "Rotate the active orbitals among themselves. Every energy is "
+            "invariant under such a rotation, which makes it a test of the "
+            "pipeline: rotate, dump, and confirm the answer did not move."
+        ),
     )
     parser.add_argument("bundle", help="the .npz bundle")
-    parser.add_argument(
-        "--rotation", required=True, help="a .npy file holding the (nact, nact) matrix"
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument(
+        "--rotation", help="a .npy file holding the (nact, nact) orthogonal matrix"
+    )
+    group.add_argument(
+        "--random",
+        type=int,
+        metavar="SEED",
+        help=(
+            "generate a reproducible random rotation that preserves the "
+            "reference determinant's occupation groups"
+        ),
     )
     parser.add_argument("--out", required=True, help="path for the rotated bundle")
+    parser.add_argument(
+        "--allow-reference-change",
+        action="store_true",
+        help=(
+            "permit a rotation that mixes occupied with virtual active "
+            "orbitals. This replaces the reference determinant rather than "
+            "re-expressing it, and the result will not build a Hamiltonian"
+        ),
+    )
     parser.set_defaults(func=_run_rotate)
 
 
 def _run_rotate(args) -> int:
     import numpy as np
 
-    from .rotate import rotate_active_space
+    from .rotate import (
+        RotationError,
+        random_block_rotation,
+        reference_blocks,
+        rotate_active_space,
+    )
 
     try:
         bundle = load(args.bundle)
-        rotation = np.load(args.rotation)
-        rotated = rotate_active_space(bundle, rotation)
-        save(rotated, args.out)
-    except (BundleError, OSError, ValueError) as exc:
+        if args.random is not None:
+            rotation = random_block_rotation(bundle, args.random)
+        else:
+            rotation = np.load(args.rotation)
+        rotated = rotate_active_space(
+            bundle, rotation, allow_reference_change=args.allow_reference_change
+        )
+        out = save(rotated, args.out)
+    except (BundleError, RotationError, OSError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
-    except NotImplementedError as exc:
-        print(f"error: {exc}", file=sys.stderr)
-        return 2
-    print(f"wrote {args.out}")
+
+    groups = ", ".join(f"{lo + 1}-{hi}" for lo, hi in reference_blocks(bundle))
+    print(f"wrote {out}")
+    print(
+        f"  rotated {bundle.nact} active orbitals "
+        f"(occupation groups {groups}, 1-based within the window)\n"
+        f"  rotations applied so far: {rotated.provenance['rotated']}"
+    )
+    if args.allow_reference_change:
+        print(
+            "\nnote: this rotation was allowed to change the reference "
+            "determinant, so g16dump dump will refuse the result."
+        )
     return 0
 
 
