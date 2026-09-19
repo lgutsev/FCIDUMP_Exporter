@@ -255,11 +255,26 @@ def _add_dump(subparsers) -> None:
         description=(
             "Fold the frozen core and write the active-space Hamiltonian as a "
             "standard FCIDUMP. The Hamiltonian gates run first, so a bundle "
-            "that cannot produce a sound Hamiltonian never reaches the writer."
+            "that cannot produce a sound Hamiltonian never reaches the writer.\n"
+            "\n"
+            "Two files are written. The FCIDUMP itself carries no provenance, "
+            "because the format has no comment syntax its readers agree on -- a "
+            "comment above the namelist makes the file unreadable rather than "
+            "annotated. The provenance record is written beside it as "
+            "<out>.provenance.json instead, so the Hamiltonian can still be "
+            "traced back to the Gaussian job that produced it."
         ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("bundle", help="the .npz bundle")
-    parser.add_argument("--out", required=True, help="path for the FCIDUMP")
+    parser.add_argument(
+        "--out",
+        required=True,
+        help=(
+            "path for the FCIDUMP. The provenance record is written alongside "
+            "it as <out>.provenance.json."
+        ),
+    )
     parser.add_argument(
         "--threshold",
         type=float,
@@ -311,8 +326,23 @@ def _add_rotate(subparsers) -> None:
             "Apply a real orthogonal transformation entirely within the active "
             "space and write the rotated bundle. The many-body spectrum is "
             "invariant under this, which makes it a correctness test as much as "
-            "a feature."
+            "a feature.\n"
+            "\n"
+            "Rotation is not uniformly safe on a bundle, and two things are "
+            "deliberately not carried through. Orbital energies are dropped by "
+            "every rotation: inside a rotated window they are the diagonal of "
+            "nothing, and keeping them invites the very diag(orbital_energies) "
+            "mistake this package exists to correct. The stored Fock matrices "
+            "are dropped as well whenever the rotation mixes the reference "
+            "determinant's active occupied orbitals with its active virtual "
+            "ones, because they then no longer describe the determinant the "
+            "orbital ordering implies. Such a bundle comes back with "
+            "fock_source 'none' and must have its Fock matrices rebuilt through "
+            "PySCF before it can produce a Hamiltonian; g16dump says so when it "
+            "happens, and building a Hamiltonian from it is refused rather than "
+            "quietly returning a plausible wrong h'."
         ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("bundle", help="the .npz bundle")
     parser.add_argument(

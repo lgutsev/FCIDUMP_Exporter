@@ -377,8 +377,8 @@ needs any of these.
 | Milestone | What it delivers | State |
 |---|---|---|
 | M0 | legacy inventory, `.mat` probe, route templates | probe and templates written; **waiting on cluster output** |
-| M1 | test systems + two independent oracles | four `.npz` fixtures committed; `h'` and `E_core` checked against a full-transform route for RHF and ROHF; the wider oracle matrix (O2/NH, a KS set, the legacy regression) outstanding |
-| M2 | `bundle.py`, `hamiltonian.py`, `write.py` + gates | `bundle.py` and `hamiltonian.py` done, with the schema, electron-count, window, Hermiticity, orthonormality, ERI-symmetry and α/β gates |
+| M1 | test systems + two independent oracles | done: H2O RHF, CH2/NH/O2 triplet ROHF, a rotated ROHF set and B3LYP orbitals, each checked against a full AO→MO transform written with explicit loops and importing nothing from `g16dump` |
+| M2 | `bundle.py`, `hamiltonian.py`, `write.py` + gates | done, with the schema, electron-count, window, Hermiticity, orthonormality, ERI-symmetry and α/β gates |
 | M3 | writer and solver interface | writer done, round-tripped through an independent parser and through PySCF's; the Dice/Block2 examples are outstanding |
 | M4 | active-space rotations | done, with the many-body spectrum checked before and after in a numpy-only FCI |
 | M5 | benchmarks | not started |
