@@ -101,3 +101,65 @@ python3 ../scripts/inspect_mat.py probe_ch2_rohf.mat --json probe_ch2_rohf.probe
 ```
 
 Send back both `.probe.json` files (and the `.log` files if the jobs fail).
+
+## Step 2: getting the verdict on the Fock matrices
+
+The probe says which labels exist. It does not say whether the matrices behind
+them are the ones the algebra needs, and that is the question M0 actually has to
+answer: **does Gaussian store `F^α`/`F^β`, or only its Roothaan effective ROHF
+operator?**
+
+That question is decided numerically, not by reading label names, and the
+package already decides it. Run the pipeline:
+
+```bash
+g16dump extract probe_h2o_rhf.mat  --fch probe_h2o_rhf.fch  \
+        --reference RHF  --window 2 7  --out probe_h2o_rhf.npz
+g16dump validate probe_h2o_rhf.npz  --hamiltonian
+
+g16dump extract probe_ch2_rohf.mat --fch probe_ch2_rohf.fch \
+        --reference ROHF --window 2 13 --out probe_ch2_rohf.npz
+g16dump validate probe_ch2_rohf.npz --hamiltonian
+```
+
+`validate --hamiltonian` builds `h'` from both spins and compares them. There
+are exactly three outcomes, and all three are useful:
+
+| What you see | What it means | What to do |
+|---|---|---|
+| `h' alpha/beta agreement` around 1e-15, and `E_scf ... (agrees)` | Gaussian stored genuine `F^α`/`F^β`. The stored-Fock path works. | Nothing. Record it and drop the UNVERIFIED banner. |
+| `SpinConsistencyError`, deviation ~0.1–1 Ha, mentioning the Roothaan operator | Gaussian stored its effective ROHF operator. **Expected, and not a bug.** | Use the rebuilt-Fock path (`hamiltonian.with_rebuilt_fock`), which needs the `.fch`. |
+| `no Fock matrix was found in the .mat` | The labels are spelled differently, or Gaussian does not write them at all. | Send the `.probe.json`; `matfile.LABELS` needs the real spelling. |
+
+Only the third outcome requires a code change. The first two are both handled,
+which is why the writer and the rotations did not wait on this gate.
+
+### Expected numbers
+
+Both probe geometries and both windows are identical to the committed fixtures
+in `tests/data/`, so the Gaussian run can be checked directly against numbers
+PySCF produced independently. Agreement to about 1e-6 Ha is the right
+expectation — the residual is SCF convergence and integral thresholds, not
+method. Neither basis has d functions, so there is no Cartesian/spherical
+ambiguity to account for.
+
+| Quantity | `probe_h2o_rhf` | `probe_ch2_rohf` |
+|---|---|---|
+| `E_nuc` | 9.1895337629 | 5.3800248517 |
+| `E(SCF)` | −74.9630231385 | −38.8684854585 |
+| `E_core` (from `validate`) | −51.4711696318 | −28.6809764260 |
+| `E_ref` (must equal `E(SCF)`) | −74.9630231385 | −38.8684854585 |
+| `nao` / `nmo` | 7 / 7 | 13 / 13 |
+| `ncore` / `nact` | 1 / 6 | 1 / 12 |
+
+A disagreement in `E_nuc` means the geometry was edited; in `E(SCF)` with
+`E_nuc` correct, the basis or convergence differs; in `E_core` with both of
+those right, the window did not apply as intended.
+
+### Then the FCIDUMP
+
+Once `validate --hamiltonian` reports agreement, the rest is already tested:
+
+```bash
+g16dump dump probe_ch2_rohf.npz --out probe_ch2_rohf.FCIDUMP --dice-nocc
+```

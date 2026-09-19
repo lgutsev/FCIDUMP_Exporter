@@ -30,6 +30,16 @@ One fixture per thing worth distinguishing:
     Fock matrix is not diagonal while the reference determinant is unchanged.
     This is where ``diag(orbital_energies)`` fails and the Fock-matrix algebra
     does not.
+``nh_rohf``
+    A second open-shell system, and a different one: NH is a diatomic with two
+    singly occupied pi orbitals that are degenerate, where CH2's are not. A
+    degeneracy is where an orbital-order convention is easiest to get wrong, so
+    one system is not enough to believe the open-shell path.
+``h2o_rks``
+    Real B3LYP orbitals. Every other fixture is Hartree-Fock, so the KS gate was
+    only ever tested on a relabelled HF bundle -- which cannot show the thing
+    that actually matters, that the HF energy evaluated in KS orbitals is a
+    different number from the DFT energy. This one carries both.
 """
 
 from __future__ import annotations
@@ -50,6 +60,7 @@ H2O = "O 0.000000 0.000000 0.117300; H 0.000000 0.757200 -0.469200; " \
       "H 0.000000 -0.757200 -0.469200"
 CH2 = "C 0.000000 0.000000 0.190000; H 0.000000 0.990000 -0.560000; " \
       "H 0.000000 -0.990000 -0.560000"
+NH = "N 0.000000 0.000000 0.000000; H 0.000000 0.000000 1.045000"
 
 
 def _windowed_eri(mol, mo, act_start, act_stop):
@@ -177,6 +188,51 @@ def main() -> int:
     # the honest thing: they are diagnostics, and here they diagnose nothing.
     rotated.mo_energy_alpha = None
     written.append(save(rotated, DATA / "ch2_rohf_rotated.npz"))
+
+    # ------------------------------------------------- NH ROHF triplet
+    # A second open-shell case, chosen to differ from CH2 where it counts: the
+    # two singly occupied orbitals are a degenerate pi pair, so any assumption
+    # about orbital ordering that happens to hold for CH2 gets a second test.
+    mol3 = gto.M(atom=NH, basis="6-31g", spin=2, verbose=0)
+    mf3 = scf.ROHF(mol3).set(conv_tol=1e-12).run()
+    mo3 = mf3.mo_coeff
+    nalpha3, nbeta3 = (int(n) for n in mf3.nelec)
+    fock_a3, fock_b3 = rebuild_fock(mol3, mo3, nalpha3, nbeta3, mf3.get_hcore())
+    written.append(save(_bundle(
+        mol3, mf3, mo3, nalpha3, nbeta3, 1, mo3.shape[1], "ROHF",
+        fock_a3, fock_b3, "pyscf_rebuilt",
+        "NH triplet; the singly occupied orbitals are a degenerate pi pair"),
+        DATA / "nh_rohf.npz"))
+
+    # ------------------------------------------------ H2O RKS/B3LYP
+    # A Kohn-Sham bundle carries no Fock matrix at all: the stored KS matrix
+    # contains exchange-correlation and is not the HF Fock operator, so
+    # matfile.py refuses to put it in fock_ao_*. The rebuilt-Fock path is the
+    # only way to use these orbitals, and the energy it produces is the HF
+    # energy evaluated in KS orbitals -- deliberately NOT the DFT total energy,
+    # which is what e_scf holds. Both numbers are recorded so a test can assert
+    # they differ rather than take it on faith.
+    from pyscf import dft
+
+    mol4 = gto.M(atom=H2O, basis="6-31g", verbose=0)
+    mf4 = dft.RKS(mol4).set(xc="b3lyp", conv_tol=1e-12).run()
+    mo4 = mf4.mo_coeff
+
+    ks = _bundle(
+        mol4, mf4, mo4, 5, 5, 1, mo4.shape[1], "RKS",
+        None, None, "none",
+        "real B3LYP orbitals; no Fock matrix, by design")
+    hf_fock_a, _ = rebuild_fock(mol4, mo4, 5, 5, mf4.get_hcore())
+    hcore_mo = mo4.T @ mf4.get_hcore() @ mo4
+    fock_mo = mo4.T @ hf_fock_a @ mo4
+    e_hf_in_ks = float(mol4.energy_nuc()) + float(
+        np.sum(np.diag(hcore_mo)[:5] + np.diag(fock_mo)[:5])
+    )
+    ks.provenance["e_hf_in_ks_orbitals"] = e_hf_in_ks
+    ks.provenance["e_dft"] = float(mf4.e_tot)
+    written.append(save(ks, DATA / "h2o_rks.npz"))
+    print(f"  h2o_rks: E(DFT) = {mf4.e_tot:.10f}, "
+          f"E(HF in KS orbitals) = {e_hf_in_ks:.10f}")
 
     for path in written:
         print(f"  {path.relative_to(DATA.parent.parent)}  "
