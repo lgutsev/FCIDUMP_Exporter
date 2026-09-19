@@ -38,7 +38,6 @@ import json
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
 
 import numpy as np
 
@@ -126,12 +125,12 @@ class Bundle:
     eri_act: np.ndarray
 
     fock_source: str = "none"
-    fock_ao_alpha: Optional[np.ndarray] = None
-    fock_ao_beta: Optional[np.ndarray] = None
-    mo_energy_alpha: Optional[np.ndarray] = None
-    mo_energy_beta: Optional[np.ndarray] = None
-    atom_charges: Optional[np.ndarray] = None
-    e_scf: Optional[float] = None
+    fock_ao_alpha: np.ndarray | None = None
+    fock_ao_beta: np.ndarray | None = None
+    mo_energy_alpha: np.ndarray | None = None
+    mo_energy_beta: np.ndarray | None = None
+    atom_charges: np.ndarray | None = None
+    e_scf: float | None = None
 
     provenance: dict = field(default_factory=dict)
     schema_version: int = SCHEMA_VERSION
@@ -536,7 +535,7 @@ def _check_eri_symmetry(b: Bundle, tol: float) -> list[str]:
 # --------------------------------------------------------------- provenance
 
 
-def git_commit(repo: Optional[Path] = None) -> Optional[str]:
+def git_commit(repo: Path | None = None) -> str | None:
     """The commit this bundle was produced at, or ``None`` outside a checkout."""
     root = Path(repo) if repo else Path(__file__).resolve().parent.parent
     try:
@@ -553,14 +552,14 @@ def git_commit(repo: Optional[Path] = None) -> Optional[str]:
 
 def make_provenance(
     *,
-    source_file: Optional[str] = None,
-    fch_file: Optional[str] = None,
-    route: Optional[str] = None,
-    basis: Optional[str] = None,
-    method: Optional[str] = None,
-    window_1based: Optional[tuple] = None,
+    source_file: str | None = None,
+    fch_file: str | None = None,
+    route: str | None = None,
+    basis: str | None = None,
+    method: str | None = None,
+    window_1based: tuple | None = None,
     fock_source: str = "none",
-    extra: Optional[dict] = None,
+    extra: dict | None = None,
 ) -> dict:
     """Assemble the provenance record every bundle carries.
 

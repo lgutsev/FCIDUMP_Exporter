@@ -32,7 +32,6 @@ Nothing in this module reads a file or imports pyscf, except
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional, Tuple
 
 import numpy as np
 
@@ -98,7 +97,7 @@ def to_mo(matrix_ao: np.ndarray, mo_coeff: np.ndarray) -> np.ndarray:
     return mo_coeff.T @ matrix_ao @ mo_coeff
 
 
-def mo_fock_matrices(bundle: Bundle) -> Tuple[np.ndarray, np.ndarray]:
+def mo_fock_matrices(bundle: Bundle) -> tuple[np.ndarray, np.ndarray]:
     """The alpha and beta Fock matrices of ``bundle``, in the MO basis.
 
     A closed-shell bundle may legitimately store only the alpha matrix, since
@@ -134,7 +133,7 @@ def mo_fock_matrices(bundle: Bundle) -> Tuple[np.ndarray, np.ndarray]:
 
 def _coulomb_exchange_over_occupied(
     eri_act: np.ndarray, nocc: int
-) -> Tuple[np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray]:
     """``sum_{k<nocc} (tu|kk)`` and ``sum_{k<nocc} (tk|ku)`` over the window."""
     if nocc == 0:
         zero = np.zeros(eri_act.shape[:2])
@@ -151,7 +150,7 @@ def effective_one_electron(
     active: slice,
     nocc_act_alpha: int,
     nocc_act_beta: int,
-) -> Tuple[np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray]:
     """Both spin-derived effective one-electron Hamiltonians, unreconciled.
 
     Returned separately and on purpose: the caller compares them. A function
@@ -277,7 +276,7 @@ def active_hamiltonian(
 # ------------------------------------------------------- rebuilt-Fock path
 
 
-def densities(mo_coeff: np.ndarray, nalpha: int, nbeta: int) -> Tuple[np.ndarray, ...]:
+def densities(mo_coeff: np.ndarray, nalpha: int, nbeta: int) -> tuple[np.ndarray, ...]:
     """``P^sigma = C_occ C_occ.T`` from the orbitals and their occupations."""
     occ_a = mo_coeff[:, :nalpha]
     occ_b = mo_coeff[:, :nbeta]
@@ -289,8 +288,8 @@ def rebuild_fock(
     mo_coeff: np.ndarray,
     nalpha: int,
     nbeta: int,
-    hcore_ao: Optional[np.ndarray] = None,
-) -> Tuple[np.ndarray, np.ndarray]:
+    hcore_ao: np.ndarray | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
     """Build ``F^sigma = Hcore + J[Pa+Pb] - K[Psigma]`` through PySCF.
 
     This is the path that makes Kohn-Sham orbitals usable, and the path an ROHF

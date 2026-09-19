@@ -18,7 +18,7 @@ What the implementation owes, recorded here so it is not rediscovered:
 
 from __future__ import annotations
 
-from typing import Optional, Sequence
+from collections.abc import Sequence
 
 from .hamiltonian import ActiveHamiltonian
 
@@ -27,10 +27,10 @@ def write_fcidump(
     hamiltonian: ActiveHamiltonian,
     path,
     *,
-    orbsym: Optional[Sequence[int]] = None,
+    orbsym: Sequence[int] | None = None,
     isym: int = 1,
     threshold: float = 0.0,
-    provenance: Optional[dict] = None,
+    provenance: dict | None = None,
 ):
     """Write ``hamiltonian`` to ``path`` in FCIDUMP format.
 
