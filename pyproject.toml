@@ -34,7 +34,11 @@ classifiers = [
 # one CI can rely on.
 validate = ["pyscf>=2.0"]
 test = ["pytest>=7"]
-lint = ["ruff>=0.5"]
+# Pinned exactly, not floored. ruff adds rules in minor releases, so a range
+# lets a future release turn the lint job red with no change to this
+# repository. Bumping this pin is a deliberate commit that also clears
+# whatever the new version reports.
+lint = ["ruff==0.16.8"]
 # Everything CI installs for the oracle job, in one name.
 dev = ["g16dump[validate,test,lint]"]
 
