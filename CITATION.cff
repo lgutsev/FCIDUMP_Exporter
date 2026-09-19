@@ -1,0 +1,45 @@
+# Citation metadata. See https://citation-file-format.github.io/
+#
+# TODO before release: the `authors` block below is a placeholder and must not
+# be published as it stands.
+#
+# Attribution is deliberately left open rather than guessed. The original
+# closed-shell derivation and the scripts preserved byte-for-byte in `legacy/`
+# predate this repository, and nothing in its Git history records who wrote
+# them -- the import commit is not evidence of authorship. Inventing a name
+# here, or inferring one from the cluster paths inside those scripts, would
+# assign scientific credit on no better basis than a guess.
+#
+# To settle it, replace the `authors` list with the real author or authors
+# (given-names, family-names, and an `orcid:` and `affiliation:` where known),
+# delete this comment block, and add a `preferred-citation:` section if the
+# derivation has been published. The same names belong in the "Credits and
+# licensing" section of README.md.
+
+cff-version: 1.2.0
+message: >-
+  If you use this software, please cite it. The author list is a placeholder
+  and is being settled; see the comment at the top of this file.
+title: "g16dump: FCIDUMP files for SHCI and DMRG from Gaussian 16 windowed MO integrals"
+abstract: >-
+  Builds FCIDUMP files for selected-CI (Dice) and DMRG (Block2) solvers from a
+  Gaussian 16 matrix-element file, without ever transforming integrals over the
+  full MO space. Gaussian transforms the two-electron integrals over the active
+  window only; the frozen core is folded analytically into an effective
+  one-electron Hamiltonian and a scalar core energy. The open-shell algebra is
+  exact for ROHF references whose alpha and beta Fock matrices are available,
+  and the alpha/beta agreement is checked rather than assumed.
+type: software
+license: MIT
+repository-code: "https://github.com/lgutsev/FCIDUMP_Exporter"
+keywords:
+  - quantum chemistry
+  - FCIDUMP
+  - Gaussian 16
+  - selected configuration interaction
+  - DMRG
+  - active space
+  - frozen core
+
+authors:
+  - name: "PLACEHOLDER -- see the comment at the top of this file"

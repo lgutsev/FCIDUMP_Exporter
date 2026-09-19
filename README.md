@@ -10,12 +10,13 @@ frozen core is folded analytically into an effective one-electron Hamiltonian
 `h'` and a scalar `E_core`. This takes seconds where a full-space dump takes
 days.
 
-**Status: M1/M2. The core package is implemented and tested; the FCIDUMP writer
-is not.** `bundle.py`, `matfile.py` and `hamiltonian.py` are in place, and the
-frozen-core algebra is checked against an independent full-transform route. The
-Gaussian route section in `gaussian/` is still unverified and the
-matrix-element labels are still unconfirmed, so `extract` has not yet read a
-real `.mat`. See [Project status](#project-status).
+**Status: the pipeline is complete from the `.npz` bundle onward and tested;
+`extract` has not yet read a real `.mat`.** The bundle, the open-shell
+frozen-core algebra, the FCIDUMP writer and the active-space rotations are all
+implemented, with the reference energy reproduced to 1e-9 Ha through an
+independent read-back and through PySCF. What remains unverified is the front
+door: the Gaussian route section in `gaussian/` and the matrix-element labels
+are still unconfirmed against a real Gaussian run. See [Project status](#project-status).
 
 ## Why this exists
 
@@ -198,14 +199,38 @@ PySCF.
 ```bash
 g16dump extract JOB.mat --fch JOB.fch --reference ROHF --window 6 40 --out JOB.npz
 g16dump validate JOB.npz --hamiltonian     # builds h', checks E_ref against E_scf
-g16dump dump JOB.npz --out FCIDUMP         # M3
-g16dump rotate JOB.npz --rotation U.npy --out rotated.npz   # M4
+g16dump dump JOB.npz --out FCIDUMP --dice-nocc
+g16dump rotate JOB.npz --random 1 --out rotated.npz
 ```
 
 `--reference` is required and is never inferred. `--window` may be omitted, in
 which case the partition the `.mat` reports is used; either way it is
 cross-checked against the dimension of the two-electron block that is actually
 present, and a disagreement stops the run.
+
+Always run `validate --hamiltonian` before dumping. It is the step that catches
+a Roothaan operator or a Kohn-Sham matrix, and it costs a second.
+
+The FCIDUMP carries only the format. Provenance is written beside it as
+`FCIDUMP.provenance.json`, because FCIDUMP has no comment syntax and every way
+of smuggling one in breaks some reader: above the namelist, a `/` in a path or
+a date can truncate the header; below the last record, a parser that reads every
+remaining line as an integral fails on it.
+
+`--threshold` omits small two-electron integrals. It defaults to `0.0` and
+should usually stay there: the damage is neither proportional to the threshold
+nor smooth. For the CH2 fixture, `1e-2` leaves `E_ref` untouched to 1e-14 while
+`1e-1` costs 0.2 Ha, so a value that looks harmless on one system says nothing
+about the next.
+
+`rotate` mixes the active orbitals among themselves, which cannot change any
+energy — making it the cheapest real test of a result. Dump both, run the
+solver twice, and the correlated energies must agree. A rotation that mixes
+occupied with virtual orbitals is refused, because that replaces the reference
+determinant rather than re-expressing it; see `g16dump/rotate.py`.
+
+[`examples/`](examples/) has a complete Dice `input.dat` and a runnable Block2
+DMRG script.
 
 ## KS warning
 
@@ -240,14 +265,15 @@ path raises; use the rebuilt-Fock path. This warning is repeated in the CLI.
 g16dump/      matfile.py   .mat -> .npz bundle (the only module importing QCMatEl)
               bundle.py    load/validate the .npz bundle, shape assertions
               hamiltonian.py   h', E_core, E_ref from Fock matrices
-              rotate.py    rotations inside the active space (seam, M4)
-              write.py     FCIDUMP writer (seam, M3)
+              rotate.py    rotations inside the active space
+              write.py     FCIDUMP writer, symmetry-unique and vectorized
               cli.py       extract / dump / validate / rotate
 gaussian/     route templates + how to run them
 legacy/       the original scripts, untouched, for reference and regression
 scripts/      inspect_mat.py, the matrix-element probe
+examples/     Dice input.dat and a Block2 DMRG script
 tests/        fixtures as committed .npz, no Gaussian and no gauopen needed
-              make_fixtures.py regenerates them (needs pyscf)
+              make_fixtures.py regenerates them (needs pyscf; CI can do it)
 ```
 
 The split exists because gauopen may not build everywhere and needs a compiled
@@ -288,16 +314,20 @@ needs any of these.
 | Milestone | What it delivers | State |
 |---|---|---|
 | M0 | legacy inventory, `.mat` probe, route templates | probe and templates written; **waiting on cluster output** |
-| M1 | test systems + two independent oracles | four `.npz` fixtures committed; `h'` and `E_core` checked against a full-transform route for RHF and ROHF; the wider oracle matrix (O2/NH, a KS set, the legacy regression) outstanding |
-| M2 | `bundle.py`, `hamiltonian.py`, `write.py` + gates | `bundle.py` and `hamiltonian.py` done, with the schema, electron-count, window, Hermiticity, orthonormality, ERI-symmetry and α/β gates |
-| M3 | writer and solver interface | seam in place, not implemented |
-| M4 | active-space rotations | seam in place, not implemented |
-| M5 | benchmarks | not started |
-| M6 | packaging, CI, DOI | **CI and packaging done** (3.9–3.13, numpy-only core enforced); LICENSE, CITATION.cff and DOI still open |
+| M1 | test systems + two independent oracles | six `.npz` fixtures committed (RHF, two ROHF, a rotated ROHF, a Roothaan one to be rejected, and a real B3LYP set); `h'` and `E_core` checked against a full-transform route |
+| M2 | `bundle.py`, `hamiltonian.py` + gates | done, with the schema, electron-count, window, Hermiticity, orthonormality, ERI-symmetry and α/β gates |
+| M3 | writer and solver interface | done; read back by an independent parser and by PySCF, reference energy reproduced to 1e-9 Ha |
+| M4 | active-space rotations | done; every energy and the FCI ground state verified invariant |
+| M5 | benchmarks | preserved on `claude/benchmarks-and-sweeps`, deliberately not a release blocker |
+| M6 | packaging, CI, DOI | CI, packaging, LICENSE and usage examples done; `CITATION.cff` awaits attribution, DOI still open |
 
 What M0 still gates is `extract` alone. Everything downstream of the bundle is
-exercised by the committed fixtures, so the labels in
-`g16dump.matfile.LABELS` are the only thing waiting on a real `.mat`.
+exercised by the committed fixtures, so the labels in `g16dump.matfile.LABELS`
+are the only thing waiting on a real `.mat`. The two probe jobs and the
+procedure for reading their result are in
+[`gaussian/README.md`](gaussian/README.md); both of the likely outcomes -- real
+`f^α`/`f^β`, or the Roothaan operator -- are already handled, which is why the
+writer and the rotations did not wait on it.
 
 Open questions blocking M0's gate are listed in
 [`gaussian/README.md`](gaussian/README.md) and in the probe script's output
@@ -305,7 +335,16 @@ section.
 
 ## Credits and licensing
 
-The original closed-shell derivation and the scripts in `legacy/` are by an
-author to be named here before release; `CITATION.cff` and `LICENSE` are
-deliberately not yet written, so that neither invents an attribution. Both land
-in M6.
+This project is released under the [MIT License](LICENSE).
+
+**Attribution for the original closed-shell derivation is still open.** The
+scripts preserved byte-for-byte in `legacy/` predate this repository, and
+nothing in its Git history records who wrote them — the import commit is not
+evidence of authorship. [`CITATION.cff`](CITATION.cff) therefore carries a
+marked placeholder rather than a guess, and it must be filled in before the
+work is cited or a DOI is minted. Inferring a name from the cluster paths
+inside those scripts would assign scientific credit on no better basis than a
+guess, which is worse than admitting the gap.
+
+The rebuilt package is MIT-licensed as above; `legacy/` is kept unmodified as
+reference material and carries whatever terms its original author intended.

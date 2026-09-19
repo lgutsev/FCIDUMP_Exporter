@@ -1,0 +1,34 @@
+# Dice input for a FCIDUMP produced by `g16dump dump`.
+#
+# The occupation block below is for the CH2 triplet example: 6 active electrons
+# in 12 active orbitals with MS2 = 2. Generate the right one for your own case
+# with `g16dump dump ... --dice-nocc` rather than editing this by hand -- the
+# indices are spin orbitals (alpha 2p, beta 2p+1, both 0-based), which is easy
+# to get wrong and produces a valid-looking wrong answer.
+#
+# Dice expects the integral file to be named FCIDUMP in the working directory.
+
+nocc 6
+0 2 4 6 1 3
+end
+
+# Variational stage. Each line is "sweep_iter epsilon1": the determinant
+# selection threshold, loosened to tightened.
+schedule
+0 1e-3
+3 5e-4
+6 1e-4
+end
+maxiter 12
+davidsonTol 5e-5
+dE 1e-8
+
+# Perturbative stage. epsilon2 is the PT threshold; sampleN and targetError
+# control the stochastic estimate. Set nPTiter 0 to skip PT entirely while
+# you are still checking the integrals.
+epsilon2 1e-8
+sampleN 200
+targetError 1e-4
+
+# Reduced density matrices, if you want natural orbitals or properties.
+DoRDM

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "g16dump"
-version = "0.0.1.dev0"
+version = "0.1.0"
 description = "FCIDUMP files for SHCI/DMRG from Gaussian 16 windowed MO integrals, with correct open-shell algebra"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -16,8 +16,10 @@ requires-python = ">=3.9"
 # Gaussian-independent suite in an environment where pyscf, mokit and gauopen are
 # provably absent.
 dependencies = ["numpy>=1.20"]
+license = "MIT"
+license-files = ["LICENSE"]
 classifiers = [
-  "Development Status :: 2 - Pre-Alpha",
+  "Development Status :: 3 - Alpha",
   "Intended Audience :: Science/Research",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.9",
