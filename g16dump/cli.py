@@ -156,7 +156,13 @@ def _run_validate(args) -> int:
 
 def _add_dump(subparsers) -> None:
     parser = subparsers.add_parser(
-        "dump", help="write an FCIDUMP from an .npz bundle (M3, not implemented)"
+        "dump",
+        help="write an FCIDUMP from an .npz bundle",
+        description=(
+            "Write the active-space Hamiltonian of a bundle as a FCIDUMP. The "
+            "alpha/beta consistency gate runs first, so a bundle carrying a "
+            "Roothaan operator is refused before anything is written."
+        ),
     )
     parser.add_argument("bundle", help="the .npz bundle")
     parser.add_argument("--out", required=True, help="path for the FCIDUMP")
@@ -164,34 +170,86 @@ def _add_dump(subparsers) -> None:
         "--threshold",
         type=float,
         default=0.0,
-        help="omit two-electron integrals smaller than this in magnitude",
+        help=(
+            "omit two-electron integrals smaller than this in magnitude. The "
+            "default of 0 writes every symmetry-unique integral; anything else "
+            "makes the file stop reproducing the reference energy exactly"
+        ),
     )
     parser.add_argument(
         "--isym", type=int, default=1, help="ISYM for the FCIDUMP namelist"
+    )
+    parser.add_argument(
+        "--orbsym",
+        help=(
+            "comma-separated irrep labels, one per active orbital (1-8). "
+            "Defaults to C1, i.e. all ones"
+        ),
+    )
+    parser.add_argument(
+        "--precision",
+        type=int,
+        default=None,
+        help=(
+            "digits after the decimal point in each integral. The default, 16, "
+            "is the smallest that reproduces a double exactly"
+        ),
+    )
+    parser.add_argument(
+        "--dice-nocc",
+        action="store_true",
+        help="also print Dice's nocc block for the reference determinant",
     )
     parser.set_defaults(func=_run_dump)
 
 
 def _run_dump(args) -> int:
-    from .write import write_fcidump
+    from .write import WriteError, dice_occupation_line, provenance_path, write_fcidump
+
+    options = {}
+    if args.precision is not None:
+        options["precision"] = args.precision
+    if args.orbsym:
+        try:
+            options["orbsym"] = [int(x) for x in args.orbsym.replace(",", " ").split()]
+        except ValueError:
+            print(
+                f"error: --orbsym must be integers, got {args.orbsym!r}",
+                file=sys.stderr,
+            )
+            return 1
 
     try:
         bundle = load(args.bundle)
         hamiltonian = active_hamiltonian(bundle)
-        write_fcidump(
+        out = write_fcidump(
             hamiltonian,
             args.out,
             isym=args.isym,
             threshold=args.threshold,
             provenance=bundle.provenance,
+            **options,
         )
-    except (BundleError, HamiltonianError) as exc:
+    except (BundleError, HamiltonianError, WriteError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
-    except NotImplementedError as exc:
-        print(f"error: {exc}", file=sys.stderr)
-        return 2
-    print(f"wrote {args.out}")
+
+    print(f"wrote {out}")
+    print(f"wrote {provenance_path(out)}")
+    print(
+        f"  NORB   {hamiltonian.nact}\n"
+        f"  NELEC  {hamiltonian.nelec_act}\n"
+        f"  MS2    {hamiltonian.ms2}\n"
+        f"  E_core {hamiltonian.e_core:.10f} Ha\n"
+        f"  E_ref  {hamiltonian.e_ref:.10f} Ha"
+    )
+    if args.threshold > 0:
+        print(
+            f"\nnote: integrals below {args.threshold:g} were omitted, so this "
+            f"file no longer reproduces E_ref exactly."
+        )
+    if args.dice_nocc:
+        print(f"\nDice nocc block:\n{dice_occupation_line(hamiltonian)}", end="")
     return 0
 
 

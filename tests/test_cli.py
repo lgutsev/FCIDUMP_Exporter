@@ -86,16 +86,50 @@ def test_validate_warns_about_kohn_sham_orbitals(capsys, tmp_path, synthetic):
     assert "exchange-correlation" in output
 
 
-# --------------------------------------------------------- the M3/M4 seams
+# ------------------------------------------------------------------ dump
 
-def test_dump_says_plainly_that_it_is_not_implemented(capsys, fixture_path, tmp_path):
+def test_dump_writes_a_file_and_its_provenance(capsys, fixture_path, tmp_path):
+    out = tmp_path / "FCIDUMP"
+    code, output = _run(
+        capsys, "dump", str(fixture_path("ch2_rohf")), "--out", str(out),
+    )
+    assert code == 0
+    assert out.is_file()
+    assert out.with_name(out.name + ".provenance.json").is_file()
+    assert "NORB" in output and "E_core" in output
+
+
+def test_dump_warns_that_a_threshold_costs_the_reference_energy(
+    capsys, fixture_path, tmp_path
+):
+    """The one flag that silently changes what the file means, so it says so."""
     code, output = _run(
         capsys, "dump", str(fixture_path("ch2_rohf")),
-        "--out", str(tmp_path / "FCIDUMP"),
+        "--out", str(tmp_path / "FCIDUMP"), "--threshold", "1e-3",
     )
-    assert code == 2
-    assert "M3" in output
+    assert code == 0
+    assert "no longer reproduces E_ref exactly" in output
+
+
+def test_dump_reports_a_bad_orbsym_without_a_traceback(
+    capsys, fixture_path, tmp_path
+):
+    code, output = _run(
+        capsys, "dump", str(fixture_path("ch2_rohf")),
+        "--out", str(tmp_path / "FCIDUMP"), "--orbsym", "1,2",
+    )
+    assert code == 1
+    assert "ORBSYM must name an irrep" in output
     assert not (tmp_path / "FCIDUMP").exists()
+
+
+def test_dump_can_print_the_dice_occupation_block(capsys, fixture_path, tmp_path):
+    code, output = _run(
+        capsys, "dump", str(fixture_path("ch2_rohf")),
+        "--out", str(tmp_path / "FCIDUMP"), "--dice-nocc",
+    )
+    assert code == 0
+    assert "nocc" in output and "end" in output
 
 
 def test_dump_still_runs_the_hamiltonian_gate_first(capsys, fixture_path, tmp_path):
