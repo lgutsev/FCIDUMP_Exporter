@@ -44,7 +44,7 @@ from g16dump.bundle import BundleError, load, validate
 from g16dump.hamiltonian import active_hamiltonian
 from g16dump.write import write_fcidump
 
-SOUND = ["h2o_rhf", "ch2_rohf", "ch2_rohf_rotated"]
+SOUND = ["h2o_rhf", "ch2_rohf", "ch2_rohf_rotated", "nh_rohf"]
 
 
 @pytest.fixture

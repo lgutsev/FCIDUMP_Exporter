@@ -35,11 +35,18 @@ def pytest_configure(config):
     for name, description in MARKERS.items():
         config.addinivalue_line("markers", f"{name}: {description}")
 
-FIXTURES = ("h2o_rhf", "ch2_rohf", "ch2_rohf_roothaan", "ch2_rohf_rotated")
+FIXTURES = (
+    "h2o_rhf",
+    "ch2_rohf",
+    "ch2_rohf_roothaan",
+    "ch2_rohf_rotated",
+    "nh_rohf",
+    "h2o_rks",
+)
 
 #: The fixtures whose Fock matrices really are F^alpha/F^beta, so the algebra
 #: is expected to succeed on them. ch2_rohf_roothaan is excluded on purpose.
-SOUND_FIXTURES = ("h2o_rhf", "ch2_rohf", "ch2_rohf_rotated")
+SOUND_FIXTURES = ("h2o_rhf", "ch2_rohf", "ch2_rohf_rotated", "nh_rohf")
 
 
 def _positive_definite_overlap(nao, rng):
