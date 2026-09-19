@@ -233,9 +233,16 @@ def _run_dump(args) -> int:
     except (BundleError, HamiltonianError, WriteError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
+    except OSError as exc:
+        print(f"error: cannot write {args.out}: {exc}", file=sys.stderr)
+        return 1
 
     print(f"wrote {out}")
-    print(f"wrote {provenance_path(out)}")
+    # Only claim the sidecar when one was actually written: write_fcidump skips
+    # it for an empty provenance, and a bundle can carry one.
+    sidecar = provenance_path(out)
+    if sidecar.exists():
+        print(f"wrote {sidecar}")
     print(
         f"  NORB   {hamiltonian.nact}\n"
         f"  NELEC  {hamiltonian.nelec_act}\n"

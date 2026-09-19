@@ -223,6 +223,22 @@ def active_hamiltonian(
     effective Hamiltonians disagree by more than ``spin_tol``. That disagreement
     is a bug signal about the input, not a number to average away.
     """
+    if bundle.provenance.get("rotation_changed_reference"):
+        raise HamiltonianError(
+            "this bundle was rotated with allow_reference_change=True, so the "
+            "lowest active orbitals no longer span the occupied space.\n"
+            "The windowed algebra identifies the occupied active orbitals by "
+            "index order, so h', E_core and E_ref would all be computed for a "
+            "reference determinant this bundle no longer has.\n"
+            "This is checked here rather than left to the alpha/beta gate "
+            "because that gate cannot see it at all for a closed shell: there "
+            "F^alpha and F^beta are the same matrix, the two h' agree "
+            "identically, and the error passes silently.\n"
+            "Rotate with g16dump.rotate.random_block_rotation instead, which "
+            "mixes orbitals only within the reference determinant's occupation "
+            "groups and leaves every energy invariant."
+        )
+
     if bundle.is_ks and bundle.fock_source != "pyscf_rebuilt":
         raise HamiltonianError(
             f"{bundle.reference} orbitals with fock_source="

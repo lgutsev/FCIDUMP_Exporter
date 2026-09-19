@@ -121,8 +121,12 @@ def _check(
             f"table of at most eight irreps, and C1 is all ones; 0 in particular "
             f"is read as an out-of-range index rather than as 'no symmetry'"
         )
-    if int(isym) < 1:
-        problems.append(f"isym is {isym}; it is a 1-based irrep label")
+    if not 1 <= int(isym) <= 8:
+        problems.append(
+            f"isym is {isym}, outside 1-8. It is a 1-based Molpro irrep label "
+            f"naming the target state's symmetry, from the same table as "
+            f"orbsym, and C1 is 1"
+        )
 
     if not np.isfinite(threshold) or threshold < 0.0:
         problems.append(f"threshold must be finite and non-negative, got {threshold}")

@@ -53,7 +53,16 @@ occupied, virtual -- and :func:`rotate_active_space` checks that up front. Those
 are exactly the rotations that leave every energy invariant, which is what makes
 them a test. Pass ``allow_reference_change=True`` to perform a general change of
 active-orbital basis anyway; it is a legitimate thing to want, and the resulting
-bundle will be refused by ``active_hamiltonian`` for the reason above.
+bundle records that fact in its provenance so that
+:func:`g16dump.hamiltonian.active_hamiltonian` refuses it.
+
+That refusal is an explicit flag rather than a consequence, and the difference
+matters. The obvious argument -- that the alpha/beta consistency gate will catch
+a changed reference anyway -- is true only for an open shell. For a closed shell
+``F^alpha`` and ``F^beta`` are the same matrix, the two spin-derived ``h'``
+agree identically whatever the orbitals are, and the gate reads zero deviation
+while ``E_ref`` is several Hartree wrong. Relying on it there would be exactly
+the plausible-wrong-number failure this package exists to prevent.
 """
 
 from __future__ import annotations
@@ -117,6 +126,19 @@ def reference_blocks(bundle: Bundle) -> tuple[tuple[int, int], ...]:
     )
 
 
+def _group_names(blocks, names) -> tuple[str, ...]:
+    """Match group names to the groups that actually exist.
+
+    :func:`reference_blocks` drops empty groups, so a closed shell returns two
+    ranges, not three, and the middle name is the one that does not apply.
+    """
+    if len(blocks) == len(names):
+        return names
+    if len(blocks) == 2:
+        return (names[0], names[2])
+    return tuple(f"group {i + 1}" for i in range(len(blocks)))
+
+
 def check_reference_preserving(
     rotation: np.ndarray, blocks, tol: float = DEFAULT_TOL
 ) -> None:
@@ -137,13 +159,19 @@ def check_reference_preserving(
             leak, where = block_leak, (lo, hi)
 
     if leak > tol:
-        groups = ", ".join(f"[{lo + 1}-{hi}]" for lo, hi in blocks)
+        # Name each group for what it actually is. A closed shell has no singly
+        # occupied group at all, and reciting all three names against two ranges
+        # would misdescribe the very thing the message is explaining.
+        names = ("doubly occupied", "singly occupied", "virtual")
+        labelled = ", ".join(
+            f"[{lo + 1}-{hi}] {name}"
+            for (lo, hi), name in zip(blocks, _group_names(blocks, names))
+        )
         raise RotationError(
             f"rotation mixes orbitals across the reference determinant's "
             f"occupation groups: {leak:.3e} of block {where[0] + 1}-{where[1]} "
             f"leaks outside it.\n"
-            f"Inside the window the groups are (1-based) {groups}: doubly "
-            f"occupied, singly occupied, virtual.\n"
+            f"Inside the window the groups are (1-based) {labelled}.\n"
             f"Mixing across them does not re-express the reference "
             f"determinant, it replaces it. The windowed algebra identifies the "
             f"occupied active orbitals by index order, so E_ref and E_core stop "

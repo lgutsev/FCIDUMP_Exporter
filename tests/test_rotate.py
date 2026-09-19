@@ -190,18 +190,46 @@ def test_the_orbitals_really_moved(bundles):
     assert float(np.max(np.abs(rotated.eri_act - bundle.eri_act))) > 1e-3
 
 
-def test_the_frozen_orbitals_are_untouched(bundles):
+def test_the_frozen_core_is_untouched(bundles):
     """A rotation is inside the window; a core orbital that moved would be a bug."""
     bundle = bundles("ch2_rohf")
+    assert bundle.act_start > 0, "this fixture has no frozen core to check"
     rotated = R.rotate_active_space(bundle, R.random_block_rotation(bundle, 9))
     np.testing.assert_array_equal(
         rotated.mo_coeff[:, : bundle.act_start],
         bundle.mo_coeff[:, : bundle.act_start],
     )
-    np.testing.assert_array_equal(
-        rotated.mo_coeff[:, bundle.act_stop :],
-        bundle.mo_coeff[:, bundle.act_stop :],
+
+
+def test_the_frozen_virtuals_are_untouched(bundles):
+    """Needs a bundle that actually has one, which none of the fixtures does.
+
+    Every committed fixture windows to the top of the MO space
+    (``act_stop == nmo``), so asserting on ``mo_coeff[:, act_stop:]`` compares
+    two empty arrays and passes whatever the code does. Narrowing the window by
+    one orbital gives a real frozen virtual to check; the active ERIs are
+    already stored over the window, so the sub-window block is just a slice.
+    """
+    from dataclasses import replace
+
+    wide = bundles("nh_rohf")
+    assert wide.act_stop == wide.nmo, "fixture changed; this test needs rewriting"
+
+    stop = wide.act_stop - 1
+    nact = stop - wide.act_start
+    narrow = replace(
+        wide,
+        act_stop=stop,
+        nact=nact,
+        eri_act=np.ascontiguousarray(wide.eri_act[:nact, :nact, :nact, :nact]),
     )
+    validate(narrow)
+    assert narrow.nmo - narrow.act_stop == 1, "the point is a non-empty slice"
+
+    rotated = R.rotate_active_space(narrow, R.random_block_rotation(narrow, 9))
+    frozen = rotated.mo_coeff[:, narrow.act_stop :]
+    assert frozen.size > 0
+    np.testing.assert_array_equal(frozen, wide.mo_coeff[:, narrow.act_stop :])
 
 
 def test_the_ao_basis_matrices_are_untouched(bundles):
@@ -293,16 +321,65 @@ def test_an_opt_in_general_rotation_is_allowed_and_recorded(bundles):
     assert rotated.provenance["rotation_changed_reference"] is True
 
 
-def test_a_general_rotation_then_fails_the_alpha_beta_gate(bundles):
-    """Documented downstream behaviour, asserted so it cannot change unnoticed."""
-    from g16dump.hamiltonian import SpinConsistencyError
+@pytest.mark.parametrize("name", SOUND)
+def test_a_general_rotation_is_refused_downstream_for_every_shell(bundles, name):
+    """Refused by an explicit flag, which is the only thing that works everywhere.
 
-    bundle = bundles("ch2_rohf")
+    The tempting shortcut is to let the alpha/beta consistency gate catch this.
+    It does for an open shell. For a closed shell it cannot: ``F^alpha`` and
+    ``F^beta`` are the same matrix, so the two spin-derived ``h'`` agree
+    identically no matter how wrong the orbitals are. Before this was an
+    explicit check, ``h2o_rhf`` accepted a general rotation with a spin
+    deviation of exactly 0.0 and an ``E_ref`` 5.7 Ha off -- the precise failure
+    this package exists to prevent. Parametrised over every fixture so the
+    closed-shell case can never be the untested one again.
+    """
+    from g16dump.hamiltonian import HamiltonianError
+
+    bundle = bundles(name)
     rotated = R.rotate_active_space(
         bundle, R.random_rotation(bundle.nact, 104), allow_reference_change=True
     )
-    with pytest.raises(SpinConsistencyError):
+    with pytest.raises(HamiltonianError, match="no longer span the occupied space"):
         active_hamiltonian(rotated)
+
+
+def test_the_closed_shell_spin_gate_really_is_blind_to_this(bundles):
+    """Guard the guard: shows why the explicit flag is load-bearing, not belt-and-braces.
+
+    If this ever starts failing -- if the spin deviation becomes non-zero for a
+    closed shell -- then the gate could have caught it after all, and the
+    reasoning in rotate.py's docstring needs revisiting.
+    """
+    from g16dump import hamiltonian as H
+
+    bundle = bundles("h2o_rhf")
+    rotated = R.rotate_active_space(
+        bundle, R.random_rotation(bundle.nact, 104), allow_reference_change=True
+    )
+    fock_a, fock_b = H.mo_fock_matrices(rotated)
+    from_alpha, from_beta = H.effective_one_electron(
+        fock_a, fock_b, rotated.eri_act, rotated.active,
+        rotated.nocc_act_alpha, rotated.nocc_act_beta,
+    )
+    assert float(np.max(np.abs(from_alpha - from_beta))) == 0.0
+
+
+def test_the_refusal_names_only_the_groups_that_exist(bundles):
+    """A closed shell has two groups; reciting three names would misdescribe it."""
+    bundle = bundles("h2o_rhf")
+    assert len(R.reference_blocks(bundle)) == 2
+    with pytest.raises(R.RotationError) as excinfo:
+        R.rotate_active_space(bundle, R.random_rotation(bundle.nact, 106))
+    message = str(excinfo.value)
+    assert "doubly occupied" in message and "virtual" in message
+    assert "singly occupied" not in message
+
+    open_shell = bundles("ch2_rohf")
+    assert len(R.reference_blocks(open_shell)) == 3
+    with pytest.raises(R.RotationError) as excinfo:
+        R.rotate_active_space(open_shell, R.random_rotation(open_shell.nact, 106))
+    assert "singly occupied" in str(excinfo.value)
 
 
 def test_a_block_rotation_is_reference_preserving_by_construction(bundles):
