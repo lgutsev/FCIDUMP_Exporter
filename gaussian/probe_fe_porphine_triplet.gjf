@@ -1,0 +1,49 @@
+%chk=probe_fe_porphine_triplet.chk
+%mem=16GB
+%nprocshared=8
+#P ROHF/6-31G NoSymm Int=NoBasisTransform SCF=(Conver=10,MaxCycle=256)
+# Output=(MatrixElement,MO2ElectronIntegrals) Tran=(Full,Force) Window=(83,103)
+
+probe_fe_porphine_triplet: the same molecule, geometry and window as the singlet, as an ROHF triplet. THE COMPARISON: dump both and the triplet reference must come out ABOVE the singlet. The legacy pair puts it 0.673 Ha BELOW, which is impossible and is measured from the committed files by tests/test_legacy_regression.py. Note Fe(II) porphine genuinely has low-lying triplet and quintet states, so a small singlet-triplet gap here is real chemistry; a large NEGATIVE one is the bug. If ROHF is slow to converge, run the singlet first and add Guess=Read. Expect NELEC=22, MS2=2, active occupied 12 alpha and 10 beta.
+
+0 3
+Fe     0.00000000     0.00000000     0.00000000
+N      2.00000000     0.00000000     0.00000000
+C      2.83470041     1.09768676     0.00000000
+C      2.83470041    -1.09768676     0.00000000
+C      4.20812857     0.67500000     0.00000000
+C      4.20812857    -0.67500000     0.00000000
+H      5.07688948     1.31660305     0.00000000
+H      5.07688948    -1.31660305     0.00000000
+C      2.41568263     2.41568263     0.00000000
+H      3.17935795     3.17935795     0.00000000
+N     -0.00000000     2.00000000     0.00000000
+C     -1.09768676     2.83470041     0.00000000
+C      1.09768676     2.83470041     0.00000000
+C     -0.67500000     4.20812857     0.00000000
+C      0.67500000     4.20812857     0.00000000
+H     -1.31660305     5.07688948     0.00000000
+H      1.31660305     5.07688948     0.00000000
+C     -2.41568263     2.41568263     0.00000000
+H     -3.17935795     3.17935795     0.00000000
+N     -2.00000000    -0.00000000     0.00000000
+C     -2.83470041    -1.09768676     0.00000000
+C     -2.83470041     1.09768676     0.00000000
+C     -4.20812857    -0.67500000     0.00000000
+C     -4.20812857     0.67500000     0.00000000
+H     -5.07688948    -1.31660305     0.00000000
+H     -5.07688948     1.31660305     0.00000000
+C     -2.41568263    -2.41568263     0.00000000
+H     -3.17935795    -3.17935795     0.00000000
+N      0.00000000    -2.00000000     0.00000000
+C      1.09768676    -2.83470041     0.00000000
+C     -1.09768676    -2.83470041     0.00000000
+C      0.67500000    -4.20812857     0.00000000
+C     -0.67500000    -4.20812857     0.00000000
+H      1.31660305    -5.07688948     0.00000000
+H     -1.31660305    -5.07688948     0.00000000
+C      2.41568263    -2.41568263     0.00000000
+H      3.17935795    -3.17935795     0.00000000
+
+probe_fe_porphine_triplet.mat
+

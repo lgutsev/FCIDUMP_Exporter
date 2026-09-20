@@ -33,11 +33,18 @@ h1e_act = me.MOEd[ncore:iact, ncore:iact]     # <- f assumed diagonal
 That holds for canonical RHF and for nothing else. It is false for ROHF, and
 false for Kohn–Sham orbitals (the KS matrix is not the HF Fock matrix). The
 symptom is visible in the shipped dumps: `legacy/FePorph_3_Window.dat` puts the
-ROHF triplet reference 0.67 Ha *below* the RHF singlet in
-`legacy/FePorph_1_Window.dat`, which is impossible. The two files also differ in
-`E_core` by 0.48 Ha, and 186 of the 210 one-electron off-diagonals in each are
-exactly zero — the fingerprint of a `h'` whose only off-diagonal content comes
-from the J/K correction, because the Fock off-diagonals were never there.
+triplet reference 0.67 Ha *below* the singlet in `legacy/FePorph_1_Window.dat`,
+which is impossible. The two files also differ in `E_core` by 0.48 Ha, and 186
+of the 210 one-electron off-diagonals in each are exactly zero — the fingerprint
+of a `h'` whose only off-diagonal content comes from the J/K correction, because
+the Fock off-diagonals were never there. All three numbers are measured from the
+committed files by `tests/test_legacy_regression.py`.
+
+Those two jobs were almost certainly **UHF**, not RHF or ROHF: the legacy writer
+reads `AA`, `BA` and `BB MO 2E INTEGRALS`, and three blocks is the unrestricted
+form — a restricted job writes only `AA`. `legacy/Template.py` calls `scf.UHF`
+as well. That makes the original approach stranger still, since a spin-restricted
+FCIDUMP assumes one set of spatial orbitals and UHF has two.
 
 `legacy/FCIDUMP_Write_MOe_3.py` is separately inconsistent with itself: it builds
 $`E_{\text{core}}`$ from both the $`\alpha`$ and $`\beta`$ one-electron blocks, then

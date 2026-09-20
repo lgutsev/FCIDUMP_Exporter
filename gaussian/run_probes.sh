@@ -43,7 +43,8 @@ JOBS=(
 #   PORPHINE=1 ./run_probes.sh
 #
 if [ -n "${PORPHINE:-}" ]; then
-  JOBS+=(probe_ni_porphine_singlet probe_ni_porphine_triplet)
+  JOBS+=(probe_fe_porphine_singlet probe_fe_porphine_triplet
+         probe_ni_porphine_singlet probe_ni_porphine_triplet)
 fi
 
 PY="${PYTHON:-python3}"

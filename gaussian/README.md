@@ -174,14 +174,21 @@ PORPHINE=1 ./run_probes.sh
 Run it only after the cheap set has confirmed `ITran=5`. There is no sense
 spending a porphine SCF to discover the route was wrong.
 
-| Job | Reference | Window | Active space |
-|---|---|---|---|
-| `probe_ni_porphine_singlet` | RHF | `(84,104)` | CAS(22,21), MS2=0 |
-| `probe_ni_porphine_triplet` | ROHF | `(84,104)` | CAS(22,21), MS2=2 |
+| Job | Metal | Reference | Window | Active space |
+|---|---|---|---|---|
+| `probe_fe_porphine_singlet` | Fe, 186 e- | RHF | `(83,103)` | CAS(22,21), MS2=0 |
+| `probe_fe_porphine_triplet` | Fe, 186 e- | ROHF | `(83,103)` | CAS(22,21), MS2=2 |
+| `probe_ni_porphine_singlet` | Ni, 188 e- | RHF | `(84,104)` | CAS(22,21), MS2=0 |
+| `probe_ni_porphine_triplet` | Ni, 188 e- | ROHF | `(84,104)` | CAS(22,21), MS2=2 |
 
-**Why this window.** 188 electrons means 94 occupied orbitals, so `(84,104)` is
-11 occupied plus 10 virtual -- exactly the CAS(22,21) of the legacy
-Fe-porphyrin dumps. The indices depend only on the electron count, not on the
+The Fe pair is the one to run if you only run one: it is the same element as the
+legacy dumps. The windows differ by one because Fe has two electrons fewer than
+Ni, which moves the HOMO down by one orbital -- a good reminder that the window
+is a property of the electron count, not of the file.
+
+**Why these windows.** Ni porphine has 188 electrons, so 94 occupied orbitals
+and `(84,104)` is 11 occupied plus 10 virtual. Fe porphine has 186, so 93
+occupied and `(83,103)`. Both are exactly the CAS(22,21) of the legacy dumps. The indices depend only on the electron count, not on the
 basis, so they stay correct if you change basis set. Expect `NFC=83` and
 `NFV = NBsUse - 104`, which is around 156: this is the only job where the frozen
 core and the frozen virtual space are both large, and where getting the window
@@ -205,9 +212,15 @@ If the ROHF triplet is slow to converge, run the singlet first and add
 
 `legacy/FePorph_1_Window.dat` and `FePorph_3_Window.dat` are the original
 dumps, but **the geometry that produced them is not in this repository** --
-there is no `.gjf`, no `.log` and no coordinates anywhere in `legacy/`. Ni
-porphine above is a stand-in of the right size and the right active space, not
-the same molecule.
+there is no `.gjf`, no `.log` and no coordinates anywhere in `legacy/`, and
+`legacy/FCIDUMP_Launch.zip` holds only the two writer scripts.
+`legacy/Template.py` has an empty geometry placeholder that a job script
+substituted into.
+
+So `fe_porphine.xyz` is an *idealised D4h model* (Fe-N 2.00 A), built from the
+same verified construction as the Ni one. It is the right element, the right
+size and the right active space -- but it is a model, not a reproduction, and it
+will **not** return the legacy -2201.53 Ha.
 
 If you still have the Fe-porphyrin input, output or checkpoint, that would turn
 a stand-in into a direct regression: same molecule, same CAS(22,21), new

@@ -10,7 +10,7 @@ wrong for an open shell. These two files are the same molecule and the same
 CAS(22,21) active space in two spin states, so they can be compared directly,
 and the comparison is damning in a specific, quantifiable way:
 
-* The ROHF triplet reference lies **below** the RHF singlet. A higher-spin
+* The triplet reference lies **below** the singlet. A higher-spin
   reference determinant cannot be 0.67 Ha lower; there is no physics that does
   that, only a bug.
 * 186 of the 210 one-electron off-diagonal records in each file are exactly
@@ -19,6 +19,13 @@ and the comparison is damning in a specific, quantifiable way:
   because the Fock off-diagonals were discarded before it started.
 * The two files disagree about ``E_core`` by 0.48 Ha, for an active space that
   is supposed to be identical in both.
+
+A note on the reference type: these were most likely **UHF** jobs, not
+RHF/ROHF. ``legacy/FCIDUMP_Write_MOe_3.py`` reads ``AA``, ``BA`` and ``BB MO 2E
+INTEGRALS``, and three blocks is the unrestricted form -- a restricted job
+writes only ``AA`` -- and ``legacy/Template.py`` calls ``scf.UHF``. It does not
+change anything measured below, but it does mean the legacy pipeline was
+building a spin-restricted FCIDUMP out of two different orbital sets.
 
 Everything here is read with the independent parser in ``test_write.py``, so
 these are properties of the files rather than of any code that wrote them. No
