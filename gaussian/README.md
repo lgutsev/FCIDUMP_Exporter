@@ -113,8 +113,10 @@ It assumes no label names; it reports what is there.
 
 ## The M0 probe jobs
 
-Eight jobs. All tiny -- the largest basis is 13 functions -- so the whole set
-runs in seconds and the probe output can be read by eye. Run them with:
+Eight jobs in the default set, all tiny -- the largest basis is 13 functions --
+so the whole set runs in seconds and the probe output can be read by eye. Two
+more, on porphine at real scale, are opt-in and described further down. Run the
+default set with:
 
 ```bash
 cd gaussian
@@ -158,6 +160,59 @@ Note the `.mat` stores the two-electron block packed as a triangle of triangles,
 not as `n**4` loose numbers, so `inspect_mat.py` will report a packing candidate
 with `n = nact(nact+1)/2` -- 21 for H2O/STO-3G, 78 for CH2. That is the expected
 shape, not a failure.
+
+### Tier 2: porphine, the system this is actually for
+
+Everything above is a toy. Ni(II) porphine is 37 atoms and about 260 basis
+functions, and it is the first job here that resembles what the method was built
+for. It is opt-in because it takes minutes to hours rather than seconds:
+
+```bash
+PORPHINE=1 ./run_probes.sh
+```
+
+Run it only after the cheap set has confirmed `ITran=5`. There is no sense
+spending a porphine SCF to discover the route was wrong.
+
+| Job | Reference | Window | Active space |
+|---|---|---|---|
+| `probe_ni_porphine_singlet` | RHF | `(84,104)` | CAS(22,21), MS2=0 |
+| `probe_ni_porphine_triplet` | ROHF | `(84,104)` | CAS(22,21), MS2=2 |
+
+**Why this window.** 188 electrons means 94 occupied orbitals, so `(84,104)` is
+11 occupied plus 10 virtual -- exactly the CAS(22,21) of the legacy
+Fe-porphyrin dumps. The indices depend only on the electron count, not on the
+basis, so they stay correct if you change basis set. Expect `NFC=83` and
+`NFV = NBsUse - 104`, which is around 156: this is the only job where the frozen
+core and the frozen virtual space are both large, and where getting the window
+wrong would be expensive rather than merely incorrect.
+
+**What it proves.** A full transformation over ~260 orbitals is roughly 5x10^8
+unique integrals. Windowed to 21 it is about 24000. If this job finishes in
+minutes, the "seconds where a full-space dump takes days" claim in the top-level
+README stops being an assertion and becomes a measurement. Capture the wall time.
+
+**The comparison that matters.** Dump both spin states and compare their
+reference energies. The legacy dumps put the ROHF triplet **0.673 Ha below** the
+RHF singlet, which is impossible; `tests/test_legacy_regression.py` measures
+that from the committed files. A correct pipeline must put the triplet above the
+singlet. That is the fix, demonstrated on a real system instead of on CH2.
+
+If the ROHF triplet is slow to converge, run the singlet first and add
+`Guess=Read` -- the `.chk` is right there.
+
+### The Fe-porphyrin regression is still blocked, and you may be able to unblock it
+
+`legacy/FePorph_1_Window.dat` and `FePorph_3_Window.dat` are the original
+dumps, but **the geometry that produced them is not in this repository** --
+there is no `.gjf`, no `.log` and no coordinates anywhere in `legacy/`. Ni
+porphine above is a stand-in of the right size and the right active space, not
+the same molecule.
+
+If you still have the Fe-porphyrin input, output or checkpoint, that would turn
+a stand-in into a direct regression: same molecule, same CAS(22,21), new
+pipeline against the shipped numbers. The basis matters too -- `legacy/Template.py`
+names `anoroostz`, so the original was not a Pople basis.
 
 ### Expected energies
 

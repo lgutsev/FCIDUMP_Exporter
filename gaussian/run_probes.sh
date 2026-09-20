@@ -35,6 +35,17 @@ JOBS=(
   probe_h2o_rks              # is a Kohn-Sham matrix written as a Fock matrix
 )
 
+# Tier 2: the real thing. 37 atoms, ~260 basis functions, minutes-to-hours
+# rather than seconds, so it is opt-in. Run the set above first and only come
+# here once ITran=5 has been confirmed on something cheap -- there is no sense
+# spending a porphine SCF to discover the route was wrong.
+#
+#   PORPHINE=1 ./run_probes.sh
+#
+if [ -n "${PORPHINE:-}" ]; then
+  JOBS+=(probe_ni_porphine_singlet probe_ni_porphine_triplet)
+fi
+
 PY="${PYTHON:-python3}"
 echo "gaussian probes -> ${OUT}/"
 echo
@@ -95,7 +106,9 @@ for name in "${JOBS[@]}"; do
     if [ "${size}" -lt 20000000 ]; then
       cp -f "${name}.mat" "${OUT}/"
     else
-      echo "${name}.mat omitted, ${size} bytes" >> "${OUT}/environment.txt"
+      # A porphine .mat is expected to land here. The probe JSON is the
+      # deliverable; the raw file is only a convenience for the small jobs.
+      echo "${name}.mat omitted from the archive, ${size} bytes"         >> "${OUT}/environment.txt"
     fi
   fi
 done
