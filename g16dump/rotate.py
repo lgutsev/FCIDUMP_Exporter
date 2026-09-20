@@ -43,9 +43,7 @@ determinant -- and it identifies those *by index order*, as the lowest
 A rotation that mixes an occupied active orbital with a virtual one therefore
 does not merely re-express the reference determinant, it **replaces** it: the
 lowest orbitals of the rotated window no longer span the occupied space, so
-``E_ref`` and ``E_core`` are not the same quantities afterwards. The alpha/beta
-consistency gate in :mod:`g16dump.hamiltonian` notices and refuses, which is
-correct but reports the problem one step downstream of its cause.
+``E_ref`` and ``E_core`` are not the same quantities afterwards.
 
 So by default a rotation must be block diagonal across the three groups the
 reference determinant distinguishes inside the window -- doubly occupied, singly
@@ -76,6 +74,13 @@ from .bundle import Bundle, validate
 #: Rotating a rotated bundle composes, so this is not the accuracy of one
 #: transform but the drift a chain of them may accumulate before it is refused.
 DEFAULT_TOL = 1e-10
+
+#: The three groups a reference determinant distinguishes inside the window, in
+#: index order. Which of them are non-empty depends on the bundle, so the names
+#: travel with the ranges rather than being matched up by counting afterwards:
+#: two blocks can be (doubly, singly), (doubly, virtual) or (singly, virtual),
+#: and guessing from the count alone gets two of those three wrong.
+GROUP_NAMES = ("doubly occupied", "singly occupied", "virtual")
 
 
 class RotationError(ValueError):
@@ -120,23 +125,17 @@ def reference_blocks(bundle: Bundle) -> tuple[tuple[int, int], ...]:
     them and not at all between them. Empty groups are dropped, so a closed
     shell gives two.
     """
+    return tuple((lo, hi) for lo, hi, _ in named_reference_blocks(bundle))
+
+
+def named_reference_blocks(bundle: Bundle) -> tuple[tuple[int, int, str], ...]:
+    """:func:`reference_blocks`, with each range carrying its own name."""
     edges = (0, bundle.nocc_act_beta, bundle.nocc_act_alpha, bundle.nact)
     return tuple(
-        (lo, hi) for lo, hi in zip(edges, edges[1:]) if hi > lo
+        (lo, hi, name)
+        for lo, hi, name in zip(edges, edges[1:], GROUP_NAMES)
+        if hi > lo
     )
-
-
-def _group_names(blocks, names) -> tuple[str, ...]:
-    """Match group names to the groups that actually exist.
-
-    :func:`reference_blocks` drops empty groups, so a closed shell returns two
-    ranges, not three, and the middle name is the one that does not apply.
-    """
-    if len(blocks) == len(names):
-        return names
-    if len(blocks) == 2:
-        return (names[0], names[2])
-    return tuple(f"group {i + 1}" for i in range(len(blocks)))
 
 
 def check_reference_preserving(
@@ -144,12 +143,22 @@ def check_reference_preserving(
 ) -> None:
     """Raise unless ``rotation`` is block diagonal over ``blocks``.
 
+    ``blocks`` may be the ``(lo, hi)`` ranges from :func:`reference_blocks` or
+    the ``(lo, hi, name)`` triples from :func:`named_reference_blocks`; the
+    named form makes for a better message and is what
+    :func:`rotate_active_space` passes.
+
     The check is on the off-block elements rather than on what they do, because
     the consequence -- a different reference determinant -- is not something the
     caller can inspect afterwards.
     """
+    blocks = tuple(
+        block if len(block) == 3 else (block[0], block[1], "group")
+        for block in blocks
+    )
+
     leak, where = 0.0, None
-    for lo, hi in blocks:
+    for lo, hi, _ in blocks:
         outside = np.ones(rotation.shape[0], dtype=bool)
         outside[lo:hi] = False
         if not outside.any():
@@ -159,14 +168,7 @@ def check_reference_preserving(
             leak, where = block_leak, (lo, hi)
 
     if leak > tol:
-        # Name each group for what it actually is. A closed shell has no singly
-        # occupied group at all, and reciting all three names against two ranges
-        # would misdescribe the very thing the message is explaining.
-        names = ("doubly occupied", "singly occupied", "virtual")
-        labelled = ", ".join(
-            f"[{lo + 1}-{hi}] {name}"
-            for (lo, hi), name in zip(blocks, _group_names(blocks, names))
-        )
+        labelled = ", ".join(f"[{lo + 1}-{hi}] {name}" for lo, hi, name in blocks)
         raise RotationError(
             f"rotation mixes orbitals across the reference determinant's "
             f"occupation groups: {leak:.3e} of block {where[0] + 1}-{where[1]} "
@@ -222,7 +224,7 @@ def rotate_active_space(
     """
     matrix = check_orthogonal(rotation, bundle.nact, tol)
     if not allow_reference_change:
-        check_reference_preserving(matrix, reference_blocks(bundle), tol)
+        check_reference_preserving(matrix, named_reference_blocks(bundle), tol)
 
     mo_coeff = np.array(bundle.mo_coeff, copy=True)
     mo_coeff[:, bundle.active] = mo_coeff[:, bundle.active] @ matrix
@@ -287,10 +289,12 @@ def random_block_rotation(bundle: Bundle, seed: int) -> np.ndarray:
 __all__ = [
     "DEFAULT_TOL",
     "RotationError",
+    "GROUP_NAMES",
     "check_orthogonal",
     "check_reference_preserving",
     "random_block_rotation",
     "random_rotation",
+    "named_reference_blocks",
     "reference_blocks",
     "rotate_active_space",
     "transform_eri",

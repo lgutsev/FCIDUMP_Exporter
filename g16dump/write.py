@@ -108,6 +108,17 @@ def _check(
         problems.append(
             f"{nelec} active electrons do not fit in {nact} active orbitals"
         )
+    # The Pauli bound on each spin string separately. The total-electron check
+    # above passes things this one catches: 10 electrons with MS2 = 8 is 9 alpha
+    # and 1 beta, which fits in 6 orbitals on the total count and not at all on
+    # the alpha one.
+    nalpha, nbeta = (nelec + ms2) // 2, (nelec - ms2) // 2
+    if nalpha > nact or nbeta > nact:
+        problems.append(
+            f"NELEC {nelec} with MS2 {ms2} is {nalpha} alpha and {nbeta} beta "
+            f"electrons, which does not fit in {nact} spatial orbitals: at most "
+            f"one electron of each spin per orbital"
+        )
 
     if len(orbsym) != nact:
         problems.append(
@@ -276,6 +287,44 @@ def write_fcidump(
     pair_t, pair_u = _pair_indices(nact)
     npair = pair_t.size
 
+    # Written to a neighbouring temporary and moved into place only once it is
+    # complete. Streaming straight into `path` would truncate whatever was
+    # there on the first write and leave a half-written file behind on any
+    # failure -- and the symmetry check inside the loop below can fail at any
+    # bra pair. A truncated FCIDUMP is not obviously broken to a reader: it
+    # parses, and the integrals it does contain are right.
+    scratch = path.with_name(path.name + ".partial")
+    try:
+        _write_records(
+            scratch, hamiltonian, h, eri, orbsym, isym, threshold,
+            value_format, pair_t, pair_u, npair, nact,
+        )
+        scratch.replace(path)
+    except BaseException:
+        try:
+            scratch.unlink()
+        except OSError:
+            pass
+        raise
+
+    if provenance:
+        _write_provenance(path, provenance)
+    else:
+        # A sidecar left over from an earlier write describes orbitals this file
+        # no longer contains. Removing it is the honest outcome: no provenance
+        # is recoverable, and stale provenance is worse than none.
+        stale = provenance_path(path)
+        if stale.exists():
+            stale.unlink()
+
+    return path
+
+
+def _write_records(
+    path, hamiltonian, h, eri, orbsym, isym, threshold, value_format,
+    pair_t, pair_u, npair, nact,
+) -> None:
+    """Stream the namelist and every record to ``path``."""
     with path.open("w", encoding="ascii", newline="\n") as handle:
         handle.write(
             _header(nact, int(hamiltonian.nelec_act), int(hamiltonian.ms2),
@@ -314,11 +363,6 @@ def write_fcidump(
 
         # The scalar, last, with four zero indices.
         handle.write(f"{value_format % hamiltonian.e_core}    0    0    0    0\n")
-
-    if provenance:
-        _write_provenance(path, provenance)
-
-    return path
 
 
 def _assert_eightfold(

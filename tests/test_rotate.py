@@ -382,6 +382,43 @@ def test_the_refusal_names_only_the_groups_that_exist(bundles):
     assert "singly occupied" in str(excinfo.value)
 
 
+def test_group_names_follow_the_boundaries_not_the_count(bundles):
+    """Two blocks is not one shape, and naming them by counting gets two wrong.
+
+    ``reference_blocks`` drops whichever groups are empty, so a two-block window
+    can be (doubly, singly) when it is fully occupied, (doubly, virtual) for a
+    closed shell, or (singly, virtual) when the frozen core already takes every
+    beta electron. Deducing the names from ``len(blocks) == 2`` labels the last
+    two of those incorrectly.
+    """
+    from dataclasses import replace
+
+    bundle = bundles("ch2_rohf")  # nocc_act_beta=2, nocc_act_alpha=4, nact=12
+
+    closed = replace(bundle, nalpha=3, nbeta=3, nelec=6, multiplicity=1)
+    assert [n for _, _, n in R.named_reference_blocks(closed)] == [
+        "doubly occupied", "virtual",
+    ]
+
+    # ncore == nbeta: no doubly occupied active orbital at all.
+    no_doubly = replace(bundle, nbeta=bundle.ncore)
+    assert no_doubly.nocc_act_beta == 0
+    assert [n for _, _, n in R.named_reference_blocks(no_doubly)] == [
+        "singly occupied", "virtual",
+    ]
+
+    # The window is entirely occupied: nothing virtual in it.
+    full = replace(bundle, nalpha=bundle.ncore + bundle.nact)
+    assert full.nocc_act_alpha == bundle.nact
+    assert [n for _, _, n in R.named_reference_blocks(full)] == [
+        "doubly occupied", "singly occupied",
+    ]
+
+    assert R.reference_blocks(bundle) == tuple(
+        (lo, hi) for lo, hi, _ in R.named_reference_blocks(bundle)
+    )
+
+
 def test_a_block_rotation_is_reference_preserving_by_construction(bundles):
     bundle = bundles("ch2_rohf")
     rotation = R.random_block_rotation(bundle, 105)

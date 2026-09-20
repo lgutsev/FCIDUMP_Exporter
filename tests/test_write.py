@@ -428,6 +428,57 @@ def test_no_provenance_means_no_sidecar(hamiltonians, tmp_path):
     assert not provenance_path(path).exists()
 
 
+def test_rewriting_without_provenance_removes_the_stale_sidecar(
+    hamiltonians, tmp_path
+):
+    """A sidecar describing an earlier dump is worse than no sidecar at all.
+
+    Left in place it sits beside a FCIDUMP it does not describe, and every tool
+    that reads the pair -- including this package's own CLI, which reports what
+    it wrote -- would report provenance for the wrong file.
+    """
+    hamiltonian = hamiltonians("h2o_rhf")
+    path = tmp_path / "again.FCIDUMP"
+    write_fcidump(hamiltonian, path, provenance={"run": "first"})
+    assert provenance_path(path).exists()
+
+    write_fcidump(hamiltonian, path)
+    assert not provenance_path(path).exists()
+
+
+def test_a_failed_write_leaves_the_previous_file_intact(hamiltonians, tmp_path):
+    """The destination is replaced only once a complete file exists.
+
+    The symmetry check runs inside the record loop, so a write can fail at any
+    bra pair. Streaming into the destination would truncate a good FCIDUMP to a
+    prefix of itself -- and a truncated FCIDUMP still parses, with every
+    integral it does contain correct, so nothing downstream would notice.
+    """
+    hamiltonian = hamiltonians("h2o_rhf")
+    path = tmp_path / "precious.FCIDUMP"
+    write_fcidump(hamiltonian, path)
+    original = path.read_bytes()
+
+    broken = np.array(hamiltonian.eri_act, copy=True)
+    broken[3, 2, 1, 0] += 1e-3
+    with pytest.raises(WriteError):
+        write_fcidump(replace(hamiltonian, eri_act=broken), path)
+
+    assert path.read_bytes() == original
+    assert not path.with_name(path.name + ".partial").exists()
+
+
+def test_a_failed_first_write_leaves_nothing_behind(hamiltonians, tmp_path):
+    hamiltonian = hamiltonians("h2o_rhf")
+    path = tmp_path / "never.FCIDUMP"
+    broken = np.array(hamiltonian.eri_act, copy=True)
+    broken[3, 2, 1, 0] += 1e-3
+    with pytest.raises(WriteError):
+        write_fcidump(replace(hamiltonian, eri_act=broken), path)
+    assert not path.exists()
+    assert not path.with_name(path.name + ".partial").exists()
+
+
 # ------------------------------------------------------- refusing bad input
 
 
@@ -488,6 +539,23 @@ def test_impossible_electron_counts_are_refused(hamiltonians, tmp_path):
     hamiltonian = hamiltonians("h2o_rhf")
     with pytest.raises(WriteError, match="parity is wrong"):
         write_fcidump(replace(hamiltonian, ms2=1), tmp_path / "x.FCIDUMP")
+
+
+def test_a_spin_string_that_breaks_the_pauli_bound_is_refused(
+    hamiltonians, tmp_path
+):
+    """The total-electron count is not enough: each spin string has its own bound.
+
+    Six active orbitals hold twelve electrons in total, so NELEC = 10 passes
+    that check. With MS2 = 8 those ten are nine alpha and one beta, and nine
+    alpha electrons cannot occupy six spatial orbitals whatever the total says.
+    """
+    hamiltonian = hamiltonians("h2o_rhf")
+    assert hamiltonian.nact == 6
+    with pytest.raises(WriteError, match="does not fit in 6 spatial orbitals"):
+        write_fcidump(
+            replace(hamiltonian, nelec_act=10, ms2=8), tmp_path / "pauli.FCIDUMP"
+        )
 
 
 def test_writing_creates_the_parent_directory(hamiltonians, tmp_path):
