@@ -40,6 +40,11 @@ One fixture per thing worth distinguishing:
     only ever tested on a relabelled HF bundle -- which cannot show the thing
     that actually matters, that the HF energy evaluated in KS orbitals is a
     different number from the DFT energy. This one carries both.
+``h2o_frozen_virtual``
+    The only fixture with frozen **virtuals**. Every other one windows to the
+    top of the MO space, so ``nmo - act_stop`` is zero and any assertion about
+    the frozen-virtual block compares two empty arrays and passes whatever the
+    code does. Here three virtuals sit above the window.
 """
 
 from __future__ import annotations
@@ -233,6 +238,21 @@ def main() -> int:
     written.append(save(ks, DATA / "h2o_rks.npz"))
     print(f"  h2o_rks: E(DFT) = {mf4.e_tot:.10f}, "
           f"E(HF in KS orbitals) = {e_hf_in_ks:.10f}")
+
+    # ------------------------------------------- H2O RHF with frozen virtuals
+    # Window MOs 2-10 of 13, so one frozen core and three frozen virtuals. This
+    # is the shape `gaussian/probe_h2o_frozen_virtual.gjf` produces, and the
+    # only fixture where nmo - act_stop is not zero.
+    mol5 = gto.M(atom=H2O, basis="6-31g", verbose=0)
+    mf5 = scf.RHF(mol5).set(conv_tol=1e-12).run()
+    mo5 = mf5.mo_coeff
+    written.append(save(_bundle(
+        mol5, mf5, mo5, 5, 5, 1, 10, "RHF",
+        np.asarray(mf5.get_fock()), None, "gaussian",
+        "one frozen core and three frozen virtuals; the only fixture with nfv>0"),
+        DATA / "h2o_frozen_virtual.npz"))
+    print(f"  h2o_frozen_virtual: nmo={mo5.shape[1]}, window 2-10, "
+          f"{mo5.shape[1] - 10} frozen virtuals, E(SCF) = {mf5.e_tot:.10f}")
 
     for path in written:
         print(f"  {path.relative_to(DATA.parent.parent)}  "

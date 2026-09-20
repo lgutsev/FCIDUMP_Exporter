@@ -1,0 +1,18 @@
+%chk=probe_nh_rohf.chk
+%mem=2GB
+%nprocshared=1
+#P ROHF/6-31G NoSymm Int=NoBasisTransform SCF=(Conver=10)
+# Output=MatrixElement Tran=Full Window=(2,11)
+
+probe_nh_rohf: NH triplet ROHF/6-31G, 1 frozen core, active MOs 2-11. Geometry
+and basis match the nh_rohf fixture. A second open shell, and one that differs
+from CH2 where it counts: the two singly occupied orbitals are a degenerate pi
+pair, so any orbital-ordering assumption that happens to hold for CH2 gets a
+second, harder test.
+
+0 3
+N   0.0000000   0.0000000   0.0000000
+H   0.0000000   0.0000000   1.0450000
+
+probe_nh_rohf.mat
+

@@ -1,0 +1,19 @@
+%chk=probe_h2o_rks.chk
+%mem=2GB
+%nprocshared=1
+#P B3LYP/6-31G NoSymm Int=NoBasisTransform SCF=(Conver=10)
+# Output=MatrixElement Tran=Full Window=(2,13)
+
+probe_h2o_rks: H2O RKS/B3LYP/6-31G, 1 frozen core, active MOs 2-13. Geometry and
+basis match the h2o_rks fixture, so E(SCF) is comparable. THE POINT OF THIS JOB:
+find out whether Gaussian writes a Fock-like matrix for a DFT reference. If it
+does, that matrix is the Kohn-Sham matrix, contains exchange-correlation, and is
+NOT the HF Fock operator -- g16dump must refuse to read it into fock_ao_*.
+
+0 1
+O   0.0000000   0.0000000   0.1173000
+H   0.0000000   0.7572000  -0.4692000
+H   0.0000000  -0.7572000  -0.4692000
+
+probe_h2o_rks.mat
+

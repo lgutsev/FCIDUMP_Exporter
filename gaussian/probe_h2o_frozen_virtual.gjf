@@ -1,0 +1,21 @@
+%chk=probe_h2o_frozen_virtual.chk
+%mem=2GB
+%nprocshared=1
+#P HF/6-31G NoSymm Int=NoBasisTransform SCF=(Conver=10)
+# Output=MatrixElement Tran=Full Window=(2,10)
+
+probe_h2o_frozen_virtual: H2O RHF/6-31G, active MOs 2-10 out of 13. THE POINT OF
+THIS JOB: it is the only probe with frozen VIRTUALS. Every other job here, and
+every committed test fixture, windows to the top of the MO space, so nfv is
+always 0 and the frozen-virtual path has never been exercised against real
+output. Expect ncore = 1, nact = 9, nfv = 3, and eri_act to expand to 9^4 = 6561
+elements -- if it comes back 13^4 = 28561 then Window did not restrict the
+transformation and every conclusion from the other jobs needs rechecking.
+
+0 1
+O   0.0000000   0.0000000   0.1173000
+H   0.0000000   0.7572000  -0.4692000
+H   0.0000000  -0.7572000  -0.4692000
+
+probe_h2o_frozen_virtual.mat
+
