@@ -40,26 +40,26 @@ exactly zero — the fingerprint of a `h'` whose only off-diagonal content comes
 from the J/K correction, because the Fock off-diagonals were never there.
 
 `legacy/FCIDUMP_Write_MOe_3.py` is separately inconsistent with itself: it builds
-$E_{\text{core}}$ from both the $\alpha$ and $\beta$ one-electron blocks, then
-writes only the $\alpha$ block.
+$`E_{\text{core}}`$ from both the $`\alpha`$ and $`\beta`$ one-electron blocks, then
+writes only the $`\alpha`$ block.
 
-**The fix:** build $h'$ from the full MO Fock matrices $f^{\alpha}$ and $f^{\beta}$,
+**The fix:** build $`h'`$ from the full MO Fock matrices $`f^{\alpha}`$ and $`f^{\beta}`$,
 off-diagonals included, with one code path for RHF and ROHF. Not from orbital
 energies, and not with `ak`/`bk`/`ck` coupling coefficients — that approach has
 already been tried and failed.
 
 ## The math
 
-Spatial orbitals are shared by $\alpha$ and $\beta$ (RHF/ROHF), and integrals
-are in chemist's notation $(pq|rs)$. Three orbital sets matter:
+Spatial orbitals are shared by $`\alpha`$ and $`\beta`$ (RHF/ROHF), and integrals
+are in chemist's notation $`(pq|rs)`$. Three orbital sets matter:
 
 | Symbol | Meaning |
 |---|---|
-| $\mathcal{C}$ | the frozen-core orbitals, doubly occupied |
-| $\mathcal{A}$ | the active orbitals, i.e. Gaussian's window |
-| $\mathcal{O}_\sigma \subset \mathcal{A}$ | the active orbitals occupied in the reference determinant for spin $\sigma$ — by index order, the first $n_\sigma - n_{\text{core}}$ of them |
+| $`\mathcal{C}`$ | the frozen-core orbitals, doubly occupied |
+| $`\mathcal{A}`$ | the active orbitals, i.e. Gaussian's window |
+| $`\mathcal{O}_\sigma \subset \mathcal{A}`$ | the active orbitals occupied in the reference determinant for spin $`\sigma`$ — by index order, the first $`n_\sigma - n_{\text{core}}`$ of them |
 
-$\mathbf{C}$, upright and bold, is the matrix of MO coefficients; $\mathcal{C}$,
+$`\mathbf{C}`$, upright and bold, is the matrix of MO coefficients; $`\mathcal{C}`$,
 script, is the frozen-core set. They are different objects and the distinction
 matters in every expression below.
 
@@ -77,7 +77,7 @@ f^{\sigma}_{pq} &= \mathbf{C}\, F^{\sigma,\text{AO}}\, \mathbf{C}^{\mathsf{T}}
 
 ### Effective one-electron Hamiltonian
 
-For each spin $\sigma$, over the full active block — a matrix, not a diagonal:
+For each spin $`\sigma`$, over the full active block — a matrix, not a diagonal:
 
 ```math
 h'_{tu} = f^{\sigma}_{tu}
@@ -85,14 +85,14 @@ h'_{tu} = f^{\sigma}_{tu}
   - \sum_{k \in \mathcal{O}_{\bar{\sigma}}} (tu|kk)
 ```
 
-This is exact when $f^{\sigma}$ is the UHF-type Fock operator built from the
+This is exact when $`f^{\sigma}`$ is the UHF-type Fock operator built from the
 reference determinant's densities,
 
 ```math
 F^{\sigma} = H + J\big[P^{\alpha} + P^{\beta}\big] - K\big[P^{\sigma}\big]
 ```
 
-The result is spin-independent, so the $\alpha$ and $\beta$ expressions must
+The result is spin-independent, so the $`\alpha`$ and $`\beta`$ expressions must
 agree — which gives a free internal check:
 
 ```math
@@ -100,12 +100,12 @@ agree — which gives a free internal check:
 ```
 
 If that fails for ROHF, the stored Fock is Gaussian's Roothaan *effective*
-operator rather than $f^{\alpha}$/$f^{\beta}$. **Do not average the two.**
+operator rather than $`f^{\alpha}`$/$`f^{\beta}`$. **Do not average the two.**
 Disagreement is a bug signal; switch to the rebuilt-Fock path below.
 
 The gate behaves as designed on a Roothaan operator. Handed one for CH2/6-31G
 it rejects the input by 0.652 Ha, while the same job's genuine
-$f^{\alpha}$/$f^{\beta}$ agree to $7 \times 10^{-15}$. Which of the two a
+$`f^{\alpha}`$/$`f^{\beta}`$ agree to $`7 \times 10^{-15}`$. Which of the two a
 Gaussian `.mat` actually carries is still the M0 question, and the answer
 changes nothing in the code: a Roothaan operator is rejected either way, and
 the rebuilt-Fock path is there either way.
@@ -129,17 +129,17 @@ E_{\text{act}} = \sum_{\sigma} \sum_{t \in \mathcal{O}_{\sigma}} h'_{tt}
 E_{\text{core}} = E_{\text{ref}} - E_{\text{act}}
 ```
 
-$E_{\text{core}}$ is a *residual*, not an independent quantity, and that has a
+$`E_{\text{core}}`$ is a *residual*, not an independent quantity, and that has a
 consequence worth knowing: an error in the active two-electron integrals moves
-$E_{\text{act}}$ and $E_{\text{core}}$ by equal and opposite amounts, so
-$E_{\text{ref}}$ recovered from a FCIDUMP cannot see it. The test suite checks
+$`E_{\text{act}}`$ and $`E_{\text{core}}`$ by equal and opposite amounts, so
+$`E_{\text{ref}}`$ recovered from a FCIDUMP cannot see it. The test suite checks
 the two separately for exactly this reason.
 
 ### Reduction to the closed-shell case
 
-For RHF, $\mathcal{O}_{\alpha} = \mathcal{O}_{\beta} = \mathcal{O}$ and
-$f^{\alpha} = f^{\beta} = f$, so the two sums over $\mathcal{O}_{\sigma}$ and
-$\mathcal{O}_{\bar{\sigma}}$ collapse:
+For RHF, $`\mathcal{O}_{\alpha} = \mathcal{O}_{\beta} = \mathcal{O}`$ and
+$`f^{\alpha} = f^{\beta} = f`$, so the two sums over $`\mathcal{O}_{\sigma}`$ and
+$`\mathcal{O}_{\bar{\sigma}}`$ collapse:
 
 ```math
 \begin{aligned}
@@ -157,8 +157,8 @@ h1e_act -= 2*np.einsum('acbb->ac', h2e[:nact, :nact, :nact_2e, :nact_2e])
 h1e_act += np.einsum('abbc->ac', h2e[:nact, :nact_2e, :nact_2e, :nact])
 ```
 
-with the single difference that $f_{tu}$ is the full Fock matrix here and
-$\operatorname{diag}(\varepsilon)$ there. The two agree only when the orbitals
+with the single difference that $`f_{tu}`$ is the full Fock matrix here and
+$`\mathrm{diag}(\varepsilon)`$ there. The two agree only when the orbitals
 are canonical RHF. This equivalence is asserted numerically by the full-space
 and legacy-regression tests, not just claimed here.
 
@@ -168,9 +168,9 @@ Required when the `.mat` carries no usable HF-type Fock matrix, and **always**
 required for KS orbitals:
 
 1. Load the molecule from the matching `.fch` with MOKIT's `load_mol_from_fch`.
-2. Build $P^{\alpha}$, $P^{\beta}$ from the Gaussian orbitals and occupations.
+2. Build $`P^{\alpha}`$, $`P^{\beta}`$ from the Gaussian orbitals and occupations.
 3. One PySCF JK build:
-   $F^{\sigma} = H + J[P^{\alpha} + P^{\beta}] - K[P^{\sigma}]$.
+   $`F^{\sigma} = H + J[P^{\alpha} + P^{\beta}] - K[P^{\sigma}]`$.
    One Fock build, far cheaper than an `ao2mo`.
 4. Feed the result into the same functions as above.
 
@@ -208,9 +208,9 @@ Optional, and absent rather than null when unknown: `fock_ao_alpha`,
 
 Four conventions are worth knowing before writing against it.
 
-`mo_coeff` is stored **column-wise**, `mo_coeff[ao, mo]`, so that $\mathbf{C}^{\mathsf{T}} \mathbf{S} \mathbf{C} = \mathbf{I}$.
+`mo_coeff` is stored **column-wise**, `mo_coeff[ao, mo]`, so that $`\mathbf{C}^{\mathsf{T}} \mathbf{S} \mathbf{C} = \mathbf{I}`$.
 That is PySCF's convention, and every oracle here is PySCF. The algebra above is
-written in the row convention, where the same transform reads $\mathbf{C}\, h^{\text{AO}}\, \mathbf{C}^{\mathsf{T}}$;
+written in the row convention, where the same transform reads $`\mathbf{C}\, h^{\text{AO}}\, \mathbf{C}^{\mathsf{T}}`$;
 `matfile.py` decides which one Gaussian handed it by testing both numerically,
 rather than trusting a storage convention, and normalises to the column one.
 
@@ -221,7 +221,7 @@ so a window that does not mean what the route meant cannot pass quietly.
 
 Fock matrices are stored in the **AO** basis, so that a rotation of the active
 space never has to touch them. `hamiltonian.py` does the
-$\mathbf{C}^{\mathsf{T}} F \mathbf{C}$ transform.
+$`\mathbf{C}^{\mathsf{T}} F \mathbf{C}`$ transform.
 
 A **KS bundle never carries a stored Fock matrix at all.** `matfile.py` refuses
 to read the KS matrix into `fock_ao_*`, so a KS bundle arrives with
@@ -275,13 +275,13 @@ DMRG script.
 ## KS warning
 
 **For Kohn–Sham orbitals the stored KS matrix contains exchange–correlation and
-must never be used as $f^{\sigma}$.** The active-space Hamiltonian is always the *HF*
+must never be used as $`f^{\sigma}`$.** The active-space Hamiltonian is always the *HF*
 Hamiltonian evaluated in the KS orbitals. A KS bundle fed to the stored-Fock
 path raises; use the rebuilt-Fock path. This warning is repeated in the CLI.
 
 ## Not in v1
 
-- **UHF references** (different $\alpha$ and $\beta$ orbitals). A spin-restricted FCIDUMP
+- **UHF references** (different $`\alpha`$ and $`\beta`$ orbitals). A spin-restricted FCIDUMP
   cannot represent them. The workaround is to generate UHF natural orbitals
   (UNOs) in Gaussian and send those through the normal path. A UHF-FCIDUMP
   writer can come later if a solver we use needs one.
