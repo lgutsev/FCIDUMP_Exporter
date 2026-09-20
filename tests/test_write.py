@@ -10,7 +10,12 @@ Four claims are being made, in order of how much they matter:
 
 1. The energy of the reference determinant, evaluated from the file, reproduces
    the SCF energy of the job the bundle came from. That number came out of
-   PySCF, through a different route, before any of this code ran.
+   PySCF, through a different route, before any of this code ran. It is worth
+   knowing exactly what this does and does not establish: the total is blind to
+   the two-electron block, because ``E_core`` is defined as ``E_ref - E_act``
+   and absorbs any ERI error exactly. The active energy is therefore checked
+   separately, and one test deliberately doubles ``eri_act`` to show the total
+   really cannot see it.
 2. The file carries each symmetry-unique integral exactly once -- no duplicates,
    no omissions. Checked by canonicalising every record's indices under the
    8-fold group and comparing the multiset against the complete orbit set.
@@ -119,12 +124,13 @@ def _read_fcidump(path) -> ParsedFcidump:
     return ParsedFcidump(norb, nelec, ms2, orbsym, isym, h1, eri, e_core, records)
 
 
-def _reference_energy(parsed: ParsedFcidump) -> float:
-    """Energy of the reference determinant, from the file and nothing else.
+def _active_energy(parsed: ParsedFcidump) -> float:
+    """The reference determinant's energy within the active space, without ``E_core``.
 
-    The lowest ``nalpha`` and ``nbeta`` spatial orbitals are occupied, which is
-    what ``NELEC`` and ``MS2`` say and what the active-space Hamiltonian was
-    built around.
+    Separated from :func:`_reference_energy` because the two prove different
+    things. This one is the part that actually depends on the two-electron
+    block; the sum including ``E_core`` is not, for the reason in that
+    function's docstring.
     """
     nalpha = (parsed.nelec + parsed.ms2) // 2
     nbeta = parsed.nelec - nalpha
@@ -141,7 +147,26 @@ def _reference_energy(parsed: ParsedFcidump) -> float:
         energy += float(
             np.einsum("ttuu->", eri[:nalpha, :nalpha, :nbeta, :nbeta])
         )
-    return parsed.e_core + energy
+    return energy
+
+
+def _reference_energy(parsed: ParsedFcidump) -> float:
+    """``E_core`` plus the active-space energy, from the file and nothing else.
+
+    A caveat worth stating, because the number is more reassuring than it
+    should be: this total is **insensitive to the two-electron block**.
+    ``E_core`` is defined as ``E_ref - E_act``, so an error in the ERIs moves
+    ``E_act`` and ``E_core`` by equal and opposite amounts and cancels exactly.
+    Doubling ``eri_act`` leaves this reproducing the SCF energy to every digit.
+
+    So it checks the record round trip, the header, and the ``E_core + E_act``
+    bookkeeping -- real things, and the ones a writer can break. What it does
+    not check is whether the ERIs are physically right; :func:`_active_energy`
+    catches a writer that corrupts them, and
+    ``tests/test_hamiltonian.py::test_against_a_full_ao_to_mo_transform``
+    is what validates the tensor itself against an independent transform.
+    """
+    return parsed.e_core + _active_energy(parsed)
 
 
 def _canonical(i, j, k, m):
@@ -183,6 +208,39 @@ def test_reference_energy_read_back_reproduces_the_scf_energy(
     _, _, parsed = written(name)
     assert bundle.e_scf is not None
     assert _reference_energy(parsed) == pytest.approx(bundle.e_scf, abs=1e-9)
+
+
+@pytest.mark.parametrize("name", SOUND)
+def test_the_active_energy_from_the_file_matches_the_hamiltonian(written, name):
+    """The part of the energy that does depend on the two-electron block.
+
+    Needed because the reference-energy test above cannot see the ERIs at all:
+    ``E_core`` absorbs any error in them exactly. This one compares the active
+    energy alone, so a writer that mangles, drops or misplaces a two-electron
+    record changes the number.
+    """
+    hamiltonian, _, parsed = written(name)
+    assert _active_energy(parsed) == pytest.approx(hamiltonian.e_act, abs=1e-9)
+
+
+def test_the_reference_energy_alone_really_is_blind_to_the_eris(
+    hamiltonians, fixture_path, tmp_path
+):
+    """Guard the guard: proves the caveat in _reference_energy is real.
+
+    If this ever fails -- if the round trip starts noticing a doubled ERI
+    tensor -- then the separate active-energy test above is redundant and the
+    docstrings that explain why it exists are wrong.
+    """
+    bundle = load(fixture_path("h2o_rhf"))
+    doubled = active_hamiltonian(replace(bundle, eri_act=2.0 * bundle.eri_act))
+    parsed = _read_fcidump(
+        write_fcidump(doubled, tmp_path / "doubled.FCIDUMP")
+    )
+    assert _reference_energy(parsed) == pytest.approx(bundle.e_scf, abs=1e-9)
+    assert _active_energy(parsed) != pytest.approx(
+        active_hamiltonian(bundle).e_act, abs=1e-6
+    )
 
 
 @pytest.mark.parametrize("name", SOUND)
@@ -370,6 +428,34 @@ def test_a_threshold_keeps_the_one_electron_block_whole(written):
     hamiltonian, _, parsed = written("ch2_rohf", threshold=1e-3)
     npair = hamiltonian.nact * (hamiltonian.nact + 1) // 2
     assert len(parsed.one_electron) == npair
+
+
+def test_an_integral_exactly_at_the_threshold_is_kept(hamiltonians, tmp_path):
+    """The boundary, which no realistic tensor lands on by accident.
+
+    "Omits integrals smaller than the threshold" makes ``|v| == threshold`` a
+    keep. Mutation testing found this: flipping the comparison from ``>=`` to
+    ``>`` changed nothing any other test could see, because no ERI in any
+    fixture is ever exactly equal to a threshold anyone would pass. Choosing the
+    threshold to be one of the values makes the boundary observable.
+    """
+    hamiltonian = hamiltonians("h2o_rhf")
+    eri = np.asarray(hamiltonian.eri_act)
+
+    # A symmetry-unique element, and one large enough not to be the smallest.
+    threshold = abs(float(eri[2, 1, 2, 1]))
+    assert threshold > 0.0
+
+    parsed = _read_fcidump(
+        write_fcidump(hamiltonian, tmp_path / "edge.FCIDUMP", threshold=threshold)
+    )
+    present = {tuple(r[1:5]) for r in parsed.two_electron}
+    assert (3, 2, 3, 2) in present, (
+        "an integral whose magnitude equals the threshold exactly was dropped; "
+        "the threshold omits what is smaller than it, not what is not larger"
+    )
+    for value, *_ in parsed.two_electron:
+        assert abs(value) >= threshold
 
 
 def test_the_default_threshold_writes_every_unique_integral(written):
