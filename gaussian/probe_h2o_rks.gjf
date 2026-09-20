@@ -2,7 +2,7 @@
 %mem=2GB
 %nprocshared=1
 #P B3LYP/6-31G NoSymm Int=NoBasisTransform SCF=(Conver=10)
-# Output=MatrixElement Tran=Full Window=(2,13)
+# Output=(MatrixElement,MO2ElectronIntegrals) Tran=(Full,Force) Window=(2,13)
 
 probe_h2o_rks: H2O RKS/B3LYP/6-31G, 1 frozen core, active MOs 2-13. Geometry and
 basis match the h2o_rks fixture, so E(SCF) is comparable. THE POINT OF THIS JOB:

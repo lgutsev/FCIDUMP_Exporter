@@ -21,13 +21,18 @@ rm -rf "${OUT}" && mkdir -p "${OUT}"
 # Ordered cheapest-first and most-informative-first, so an interrupted run still
 # leaves the jobs that matter most. See README.md for what each one answers.
 JOBS=(
-  probe_h2o_rhf              # does the route work at all, closed shell
+  probe_h2_smoke             # FIRST: 2 basis functions. Is ITran 5? Is there a
+                             #   Fock record at all? If this one fails nothing
+                             #   below is worth reading.
+  probe_ch2_uhf              # SECOND: the only job that writes BETA blocks, so
+                             #   it is the reference for what a beta record
+                             #   looks like when one exists.
+  probe_h2o_rhf              # does the route work, closed shell
   probe_h2o_nowindow         # control: proves Window= actually restricts
   probe_ch2_rohf             # the Fock question, open shell
   probe_nh_rohf              # a second open shell, degenerate pi pair
   probe_h2o_frozen_virtual   # the only job with frozen virtuals
   probe_h2o_rks              # is a Kohn-Sham matrix written as a Fock matrix
-  probe_ch2_uhf              # is UHF detectable from the .mat alone
 )
 
 PY="${PYTHON:-python3}"

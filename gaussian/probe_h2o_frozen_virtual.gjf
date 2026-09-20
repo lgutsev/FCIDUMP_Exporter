@@ -2,7 +2,7 @@
 %mem=2GB
 %nprocshared=1
 #P HF/6-31G NoSymm Int=NoBasisTransform SCF=(Conver=10)
-# Output=MatrixElement Tran=Full Window=(2,10)
+# Output=(MatrixElement,MO2ElectronIntegrals) Tran=(Full,Force) Window=(2,10)
 
 probe_h2o_frozen_virtual: H2O RHF/6-31G, active MOs 2-10 out of 13. THE POINT OF
 THIS JOB: it is the only probe with frozen VIRTUALS. Every other job here, and

@@ -42,6 +42,7 @@ FIXTURES = (
     "ch2_rohf_rotated",
     "nh_rohf",
     "h2o_rks",
+    "h2o_frozen_virtual",
 )
 
 #: The fixtures whose Fock matrices really are F^alpha/F^beta, so the algebra

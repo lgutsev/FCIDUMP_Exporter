@@ -44,7 +44,13 @@ from g16dump.bundle import BundleError, load, validate
 from g16dump.hamiltonian import active_hamiltonian
 from g16dump.write import write_fcidump
 
-SOUND = ["h2o_rhf", "ch2_rohf", "ch2_rohf_rotated", "nh_rohf"]
+SOUND = [
+    "h2o_rhf",
+    "ch2_rohf",
+    "ch2_rohf_rotated",
+    "nh_rohf",
+    "h2o_frozen_virtual",
+]
 
 
 @pytest.fixture
@@ -202,34 +208,33 @@ def test_the_frozen_core_is_untouched(bundles):
 
 
 def test_the_frozen_virtuals_are_untouched(bundles):
-    """Needs a bundle that actually has one, which none of the fixtures does.
+    """Uses the one fixture that actually has frozen virtuals.
 
-    Every committed fixture windows to the top of the MO space
-    (``act_stop == nmo``), so asserting on ``mo_coeff[:, act_stop:]`` compares
-    two empty arrays and passes whatever the code does. Narrowing the window by
-    one orbital gives a real frozen virtual to check; the active ERIs are
-    already stored over the window, so the sub-window block is just a slice.
+    Every other fixture windows to the top of the MO space
+    (``act_stop == nmo``), so asserting on ``mo_coeff[:, act_stop:]`` there
+    compares two empty arrays and passes whatever the code does.
+    ``h2o_frozen_virtual`` windows MOs 2-10 of 13, leaving three.
     """
-    from dataclasses import replace
+    bundle = bundles("h2o_frozen_virtual")
+    frozen_count = bundle.nmo - bundle.act_stop
+    assert frozen_count == 3, "this test exists for the non-empty slice"
 
-    wide = bundles("nh_rohf")
-    assert wide.act_stop == wide.nmo, "fixture changed; this test needs rewriting"
-
-    stop = wide.act_stop - 1
-    nact = stop - wide.act_start
-    narrow = replace(
-        wide,
-        act_stop=stop,
-        nact=nact,
-        eri_act=np.ascontiguousarray(wide.eri_act[:nact, :nact, :nact, :nact]),
-    )
-    validate(narrow)
-    assert narrow.nmo - narrow.act_stop == 1, "the point is a non-empty slice"
-
-    rotated = R.rotate_active_space(narrow, R.random_block_rotation(narrow, 9))
-    frozen = rotated.mo_coeff[:, narrow.act_stop :]
+    rotated = R.rotate_active_space(bundle, R.random_block_rotation(bundle, 9))
+    frozen = rotated.mo_coeff[:, bundle.act_stop :]
     assert frozen.size > 0
-    np.testing.assert_array_equal(frozen, wide.mo_coeff[:, narrow.act_stop :])
+    np.testing.assert_array_equal(frozen, bundle.mo_coeff[:, bundle.act_stop :])
+
+
+def test_frozen_virtuals_do_not_change_any_energy(bundles):
+    """The frozen-virtual path, end to end, against an outside number."""
+    bundle = bundles("h2o_frozen_virtual")
+    plain = active_hamiltonian(bundle)
+    rotated = active_hamiltonian(
+        R.rotate_active_space(bundle, R.random_block_rotation(bundle, 41))
+    )
+    assert plain.e_ref == pytest.approx(bundle.e_scf, abs=1e-9)
+    assert rotated.e_ref == pytest.approx(bundle.e_scf, abs=1e-9)
+    assert rotated.e_core == pytest.approx(plain.e_core, abs=1e-9)
 
 
 def test_the_ao_basis_matrices_are_untouched(bundles):

@@ -47,7 +47,13 @@ from g16dump.write import (
     write_fcidump,
 )
 
-SOUND = ["h2o_rhf", "ch2_rohf", "ch2_rohf_rotated", "nh_rohf"]
+SOUND = [
+    "h2o_rhf",
+    "ch2_rohf",
+    "ch2_rohf_rotated",
+    "nh_rohf",
+    "h2o_frozen_virtual",
+]
 
 
 # --------------------------------------------------------- independent reader
