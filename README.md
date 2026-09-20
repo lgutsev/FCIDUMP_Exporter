@@ -65,7 +65,7 @@ matters in every expression below.
 
 Three cheap inputs, none of them a full-space transform:
 
-$$
+```math
 \begin{aligned}
 h_{pq} &= \mathbf{C}\, h^{\text{AO}}\, \mathbf{C}^{\mathsf{T}}
   &&\text{over all MOs, } O(N^3) \\
@@ -73,31 +73,31 @@ f^{\sigma}_{pq} &= \mathbf{C}\, F^{\sigma,\text{AO}}\, \mathbf{C}^{\mathsf{T}}
   &&\text{over all MOs, } O(N^3) \\
 (tu|vw) && \text{for } t,u,v,w \in \mathcal{A} \text{ only, from the window}
 \end{aligned}
-$$
+```
 
 ### Effective one-electron Hamiltonian
 
 For each spin $\sigma$, over the full active block — a matrix, not a diagonal:
 
-$$
+```math
 h'_{tu} = f^{\sigma}_{tu}
   - \sum_{k \in \mathcal{O}_{\sigma}} \Big[ (tu|kk) - (tk|ku) \Big]
   - \sum_{k \in \mathcal{O}_{\bar{\sigma}}} (tu|kk)
-$$
+```
 
 This is exact when $f^{\sigma}$ is the UHF-type Fock operator built from the
 reference determinant's densities,
 
-$$
+```math
 F^{\sigma} = H + J\big[P^{\alpha} + P^{\beta}\big] - K\big[P^{\sigma}\big]
-$$
+```
 
 The result is spin-independent, so the $\alpha$ and $\beta$ expressions must
 agree — which gives a free internal check:
 
-$$
+```math
 \max_{tu} \left| h'^{(\alpha)}_{tu} - h'^{(\beta)}_{tu} \right| < 10^{-8}
-$$
+```
 
 If that fails for ROHF, the stored Fock is Gaussian's Roothaan *effective*
 operator rather than $f^{\alpha}$/$f^{\beta}$. **Do not average the two.**
@@ -107,27 +107,27 @@ The gate behaves as designed on a Roothaan operator. Handed one for CH2/6-31G
 it rejects the input by 0.652 Ha, while the same job's genuine
 $f^{\alpha}$/$f^{\beta}$ agree to $7 \times 10^{-15}$. Which of the two a
 Gaussian `.mat` actually carries is still the M0 question, and the answer
-changes nothing in the code: a Roothaan operator is
-rejected either way, and the rebuilt-Fock path is there either way.
+changes nothing in the code: a Roothaan operator is rejected either way, and
+the rebuilt-Fock path is there either way.
 
 ### Reference, active and core energies
 
-$$
+```math
 E_{\text{ref}} = E_{\text{nuc}}
   + \frac{1}{2} \sum_{\sigma} \sum_{i \in \mathcal{C} \cup \mathcal{O}_{\sigma}}
     \Big( h_{ii} + f^{\sigma}_{ii} \Big)
-$$
+```
 
-$$
+```math
 E_{\text{act}} = \sum_{\sigma} \sum_{t \in \mathcal{O}_{\sigma}} h'_{tt}
   + \frac{1}{2} \sum_{\sigma} \sum_{t,u \in \mathcal{O}_{\sigma}}
     \Big[ (tt|uu) - (tu|ut) \Big]
   + \sum_{t \in \mathcal{O}_{\alpha}} \sum_{u \in \mathcal{O}_{\beta}} (tt|uu)
-$$
+```
 
-$$
+```math
 E_{\text{core}} = E_{\text{ref}} - E_{\text{act}}
-$$
+```
 
 $E_{\text{core}}$ is a *residual*, not an independent quantity, and that has a
 consequence worth knowing: an error in the active two-electron integrals moves
@@ -141,14 +141,14 @@ For RHF, $\mathcal{O}_{\alpha} = \mathcal{O}_{\beta} = \mathcal{O}$ and
 $f^{\alpha} = f^{\beta} = f$, so the two sums over $\mathcal{O}_{\sigma}$ and
 $\mathcal{O}_{\bar{\sigma}}$ collapse:
 
-$$
+```math
 \begin{aligned}
 h'_{tu} &= f_{tu}
   - \sum_{k \in \mathcal{O}} \Big[ (tu|kk) - (tk|ku) \Big]
   - \sum_{k \in \mathcal{O}} (tu|kk) \\
 &= f_{tu} - 2 \sum_{k \in \mathcal{O}} (tu|kk) + \sum_{k \in \mathcal{O}} (tk|ku)
 \end{aligned}
-$$
+```
 
 which is exactly the legacy closed-shell expression
 
@@ -159,9 +159,8 @@ h1e_act += np.einsum('abbc->ac', h2e[:nact, :nact_2e, :nact_2e, :nact])
 
 with the single difference that $f_{tu}$ is the full Fock matrix here and
 $\operatorname{diag}(\varepsilon)$ there. The two agree only when the orbitals
-are canonical RHF. This equivalence is asserted numerically by the
-full-space and legacy-regression
-tests, not just claimed here.
+are canonical RHF. This equivalence is asserted numerically by the full-space
+and legacy-regression tests, not just claimed here.
 
 ### Rebuilt-Fock fallback
 
