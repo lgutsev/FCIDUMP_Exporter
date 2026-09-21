@@ -47,8 +47,8 @@ work is empirical validation, not more infrastructure:
 6. only change the implementation if one of those real tests exposes a defect.
 
 Do **not** add new readers, abstractions, result databases, solver wrappers,
-UHF-FCIDUMP variants, or additional polishing merely because they are possible.
-Those are post-v1 questions.
+or additional polishing merely because they are possible. Those are outside
+the present scope unless real validation reveals a concrete need.
 
 ### Scientific target after validation
 
@@ -350,10 +350,714 @@ path raises; use the rebuilt-Fock path. This warning is repeated in the CLI.
 
 ## Not in v1
 
-- **UHF references** (different $`\alpha`$ and $`\beta`$ orbitals). A spin-restricted FCIDUMP
-  cannot represent them. The workaround is to generate UHF natural orbitals
-  (UNOs) in Gaussian and send those through the normal path. A UHF-FCIDUMP
-  writer can come later if a solver we use needs one.
+- **UHF references** (different # g16dump
+
+[![CI](https://github.com/lgutsev/FCIDUMP_Exporter/actions/workflows/ci.yml/badge.svg)](https://github.com/lgutsev/FCIDUMP_Exporter/actions/workflows/ci.yml)
+
+Solver-agnostic FCIDUMP files for large-active-space solvers such as DMRG
+(Block2) and SHCI (Dice), built from a Gaussian 16 matrix-element file without
+ever transforming integrals over the full MO space.
+
+Gaussian transforms the two-electron integrals over the active window only. The
+frozen core is folded analytically into an effective one-electron Hamiltonian
+`h'` and a scalar `E_core`. This takes seconds where a full-space dump takes
+days.
+
+**Status: the pipeline is complete from the `.npz` bundle onward and tested;
+`extract` has not yet read a real `.mat`.** The bundle, the open-shell
+frozen-core algebra, the FCIDUMP writer and the active-space rotations are all
+implemented, with the reference energy reproduced to 1e-9 Ha through an
+independent read-back and through PySCF. What remains unverified is the front
+door: the Gaussian route section in `gaussian/` and the matrix-element labels
+are still unconfirmed against a real Gaussian run. See [Project status](#project-status).
+
+## Current goal and scope
+
+This repository is **not** a Dice workflow and it is **not** intended to grow
+into a general multireference electronic-structure package. Its job is narrower:
+
+> **Gaussian 16 windowed integrals -> validated active-space Hamiltonian ->
+> solver-ready FCIDUMP.**
+
+The FCIDUMP is the product. The downstream solver is deliberately replaceable.
+Block2/DMRG and Dice/SHCI are current consumers and independent cross-checks,
+not architectural dependencies.
+
+### What we are doing right now
+
+The code is effectively **feature-frozen for v1 until M0 is closed**. The next
+work is empirical validation, not more infrastructure:
+
+1. run the real Gaussian smoke-test suite in `gaussian/run_probes.sh`;
+2. establish the actual `.mat` labels, window dimensions and RHF/ROHF/RKS
+   Fock-matrix behaviour;
+3. pass those files through `extract -> validate -> dump`;
+4. compare the resulting Hamiltonians against the independent PySCF oracle;
+5. read the same real Gaussian-derived FCIDUMP with Block2 and Dice where
+   practical, and use allowed active-space rotations as a solver-level
+   invariance check;
+6. only change the implementation if one of those real tests exposes a defect.
+
+Do **not** add new readers, abstractions, result databases, solver wrappers,
+or additional polishing merely because they are possible. Those are outside
+the present scope unless real validation reveals a concrete need.
+
+### Scientific target after validation
+
+The immediate scientific use is the **Fe analogue of the intramolecular
+porphyrin "record-player" spin switch** that motivated earlier work on this
+workflow. The legacy Gaussian-to-Dice route existed before there was a
+production-quality large-active-space calculation behind it; this repository is
+the missing correctness layer needed to revisit that problem properly.
+
+The intended progression is:
+
+- use Fe/Ni porphine-scale jobs as regression and stress tests of the exporter;
+- recover the real Fe record-player geometries and build a **physically
+  motivated** active-space ladder rather than inheriting the old CAS(22,21)
+  window as a production choice;
+- treat the relevant Fe spin manifold explicitly, including the quintet where
+  chemically appropriate;
+- use **Block2/DMRG as the leading production candidate**, with Dice/SHCI as an
+  independent check on selected cases when useful;
+- add a defensible dynamic-correlation treatment downstream if quantitative
+  spin-state energetics require it.
+
+Active-space selection, DMRG/SHCI convergence strategy, orbital optimization and
+dynamic correlation are **scientific workflow responsibilities downstream of
+this package**. They must not be silently folded into the exporter itself.
+
+The stopping condition for this repository is therefore simple: once real
+Gaussian extraction is validated end-to-end, independent consumers agree, and
+the release metadata is complete, v1 is done. At that point effort should move
+to the Fe record-player calculations rather than continued exporter expansion.
+
+## Why this exists
+
+An earlier set of scripts (kept verbatim in `legacy/`) implemented this idea for
+closed shells. The algebra in them is wrong for open shells, because they assume
+the MO Fock matrix is diagonal with orbital energies on the diagonal:
+
+```python
+me.MOE  = me.matlist["ALPHA ORBITAL ENERGIES"].expand().copy()
+me.MOEd = np.diag(me.MOE)
+h1e_act = me.MOEd[ncore:iact, ncore:iact]     # <- f assumed diagonal
+```
+
+That holds for canonical RHF and for nothing else. It is false for ROHF, and
+false for Kohn–Sham orbitals (the KS matrix is not the HF Fock matrix). The
+symptom is visible in the shipped dumps: `legacy/FePorph_3_Window.dat` puts the
+triplet reference 0.67 Ha *below* the singlet in `legacy/FePorph_1_Window.dat`,
+which is impossible. The two files also differ in `E_core` by 0.48 Ha, and 186
+of the 210 one-electron off-diagonals in each are exactly zero — the fingerprint
+of a `h'` whose only off-diagonal content comes from the J/K correction, because
+the Fock off-diagonals were never there. All three numbers are measured from the
+committed files by `tests/test_legacy_regression.py`.
+
+Those two jobs were almost certainly **UHF**, not RHF or ROHF: the legacy writer
+reads `AA`, `BA` and `BB MO 2E INTEGRALS`, and three blocks is the unrestricted
+form — a restricted job writes only `AA`. `legacy/Template.py` calls `scf.UHF`
+as well. That makes the original approach stranger still, since a spin-restricted
+FCIDUMP assumes one set of spatial orbitals and UHF has two.
+
+`legacy/FCIDUMP_Write_MOe_3.py` is separately inconsistent with itself: it builds
+$`E_{\text{core}}`$ from both the $`\alpha`$ and $`\beta`$ one-electron blocks, then
+writes only the $`\alpha`$ block.
+
+**The fix:** build $`h'`$ from the full MO Fock matrices $`f^{\alpha}`$ and $`f^{\beta}`$,
+off-diagonals included, with one code path for RHF and ROHF. Not from orbital
+energies, and not with `ak`/`bk`/`ck` coupling coefficients — that approach has
+already been tried and failed.
+
+## The math
+
+Spatial orbitals are shared by $`\alpha`$ and $`\beta`$ (RHF/ROHF), and integrals
+are in chemist's notation $`(pq|rs)`$. Three orbital sets matter:
+
+| Symbol | Meaning |
+|---|---|
+| $`\mathcal{C}`$ | the frozen-core orbitals, doubly occupied |
+| $`\mathcal{A}`$ | the active orbitals, i.e. Gaussian's window |
+| $`\mathcal{O}_\sigma \subset \mathcal{A}`$ | the active orbitals occupied in the reference determinant for spin $`\sigma`$ — by index order, the first $`n_\sigma - n_{\text{core}}`$ of them |
+
+$`\mathbf{C}`$, upright and bold, is the matrix of MO coefficients; $`\mathcal{C}`$,
+script, is the frozen-core set. They are different objects and the distinction
+matters in every expression below.
+
+Three cheap inputs, none of them a full-space transform:
+
+```math
+\begin{aligned}
+h_{pq} &= \mathbf{C}\, h^{\text{AO}}\, \mathbf{C}^{\mathsf{T}}
+  &&\text{over all MOs, } O(N^3) \\
+f^{\sigma}_{pq} &= \mathbf{C}\, F^{\sigma,\text{AO}}\, \mathbf{C}^{\mathsf{T}}
+  &&\text{over all MOs, } O(N^3) \\
+(tu|vw) && \text{for } t,u,v,w \in \mathcal{A} \text{ only, from the window}
+\end{aligned}
+```
+
+### Effective one-electron Hamiltonian
+
+For each spin $`\sigma`$, over the full active block — a matrix, not a diagonal:
+
+```math
+h'_{tu} = f^{\sigma}_{tu}
+  - \sum_{k \in \mathcal{O}_{\sigma}} \Big[ (tu|kk) - (tk|ku) \Big]
+  - \sum_{k \in \mathcal{O}_{\bar{\sigma}}} (tu|kk)
+```
+
+This is exact when $`f^{\sigma}`$ is the UHF-type Fock operator built from the
+reference determinant's densities,
+
+```math
+F^{\sigma} = H + J\big[P^{\alpha} + P^{\beta}\big] - K\big[P^{\sigma}\big]
+```
+
+The result is spin-independent, so the $`\alpha`$ and $`\beta`$ expressions must
+agree — which gives a free internal check:
+
+```math
+\max_{tu} \left| h'^{(\alpha)}_{tu} - h'^{(\beta)}_{tu} \right| < 10^{-8}
+```
+
+If that fails for ROHF, the stored Fock is Gaussian's Roothaan *effective*
+operator rather than $`f^{\alpha}`$/$`f^{\beta}`$. **Do not average the two.**
+Disagreement is a bug signal; switch to the rebuilt-Fock path below.
+
+The gate behaves as designed on a Roothaan operator. Handed one for CH2/6-31G
+it rejects the input by 0.652 Ha, while the same job's genuine
+$`f^{\alpha}`$/$`f^{\beta}`$ agree to $`7 \times 10^{-15}`$. Which of the two a
+Gaussian `.mat` actually carries is still the M0 question, and the answer
+changes nothing in the code: a Roothaan operator is rejected either way, and
+the rebuilt-Fock path is there either way.
+
+### Reference, active and core energies
+
+```math
+E_{\text{ref}} = E_{\text{nuc}}
+  + \frac{1}{2} \sum_{\sigma} \sum_{i \in \mathcal{C} \cup \mathcal{O}_{\sigma}}
+    \Big( h_{ii} + f^{\sigma}_{ii} \Big)
+```
+
+```math
+E_{\text{act}} = \sum_{\sigma} \sum_{t \in \mathcal{O}_{\sigma}} h'_{tt}
+  + \frac{1}{2} \sum_{\sigma} \sum_{t,u \in \mathcal{O}_{\sigma}}
+    \Big[ (tt|uu) - (tu|ut) \Big]
+  + \sum_{t \in \mathcal{O}_{\alpha}} \sum_{u \in \mathcal{O}_{\beta}} (tt|uu)
+```
+
+```math
+E_{\text{core}} = E_{\text{ref}} - E_{\text{act}}
+```
+
+$`E_{\text{core}}`$ is a *residual*, not an independent quantity, and that has a
+consequence worth knowing: an error in the active two-electron integrals moves
+$`E_{\text{act}}`$ and $`E_{\text{core}}`$ by equal and opposite amounts, so
+$`E_{\text{ref}}`$ recovered from a FCIDUMP cannot see it. The test suite checks
+the two separately for exactly this reason.
+
+### Reduction to the closed-shell case
+
+For RHF, $`\mathcal{O}_{\alpha} = \mathcal{O}_{\beta} = \mathcal{O}`$ and
+$`f^{\alpha} = f^{\beta} = f`$, so the two sums over $`\mathcal{O}_{\sigma}`$ and
+$`\mathcal{O}_{\bar{\sigma}}`$ collapse:
+
+```math
+\begin{aligned}
+h'_{tu} &= f_{tu}
+  - \sum_{k \in \mathcal{O}} \Big[ (tu|kk) - (tk|ku) \Big]
+  - \sum_{k \in \mathcal{O}} (tu|kk) \\
+&= f_{tu} - 2 \sum_{k \in \mathcal{O}} (tu|kk) + \sum_{k \in \mathcal{O}} (tk|ku)
+\end{aligned}
+```
+
+which is exactly the legacy closed-shell expression
+
+```python
+h1e_act -= 2*np.einsum('acbb->ac', h2e[:nact, :nact, :nact_2e, :nact_2e])
+h1e_act += np.einsum('abbc->ac', h2e[:nact, :nact_2e, :nact_2e, :nact])
+```
+
+with the single difference that $`f_{tu}`$ is the full Fock matrix here and
+$`\mathrm{diag}(\varepsilon)`$ there. The two agree only when the orbitals
+are canonical RHF. This equivalence is asserted numerically by the full-space
+and legacy-regression tests, not just claimed here.
+
+### Rebuilt-Fock fallback
+
+Required when the `.mat` carries no usable HF-type Fock matrix, and **always**
+required for KS orbitals:
+
+1. Load the molecule from the matching `.fch` with MOKIT's `load_mol_from_fch`.
+2. Build $`P^{\alpha}`$, $`P^{\beta}`$ from the Gaussian orbitals and occupations.
+3. One PySCF JK build:
+   $`F^{\sigma} = H + J[P^{\alpha} + P^{\beta}] - K[P^{\sigma}]`$.
+   One Fock build, far cheaper than an `ao2mo`.
+4. Feed the result into the same functions as above.
+
+Step 1 is the only part that needs MOKIT, and it is separable:
+`hamiltonian.with_rebuilt_fock(bundle, mol)` takes any PySCF `Mole`, so the path
+can be exercised, and a molecule supplied, without MOKIT present.
+
+`pyscf` and `mokit` become runtime dependencies for this mode only. They are
+imported lazily, and their absence is reported as a clear error rather than a
+traceback. MOKIT is not installable from PyPI.
+
+## The bundle
+
+`matfile.py` runs where gauopen lives and emits one `.npz`; everything
+downstream reads only that. The schema is version `1`:
+
+| Key | Type | Meaning |
+|---|---|---|
+| `schema_version` | int | `1` |
+| `reference` | str | `RHF`, `ROHF`, `RKS` or `ROKS` |
+| `charge`, `multiplicity` | int | |
+| `nelec`, `nalpha`, `nbeta` | int | |
+| `nao`, `nmo` | int | AO and MO counts |
+| `ncore`, `nact` | int | frozen core and active orbital counts |
+| `act_start`, `act_stop` | int | the active window, 0-based and half-open |
+| `e_nuc` | float | nuclear repulsion |
+| `mo_coeff` | (nao, nmo) | |
+| `overlap`, `hcore_ao` | (nao, nao) | |
+| `eri_act` | (nact,)×4 | chemist's `(tu|vw)`, MO basis, active window only |
+| `fock_source` | str | `gaussian`, `pyscf_rebuilt` or `none` |
+| `provenance` | str | JSON |
+
+Optional, and absent rather than null when unknown: `fock_ao_alpha`,
+`fock_ao_beta`, `mo_energy_alpha`, `mo_energy_beta`, `e_scf`, `atom_charges`.
+
+Four conventions are worth knowing before writing against it.
+
+`mo_coeff` is stored **column-wise**, `mo_coeff[ao, mo]`, so that $`\mathbf{C}^{\mathsf{T}} \mathbf{S} \mathbf{C} = \mathbf{I}`$.
+That is PySCF's convention, and every oracle here is PySCF. The algebra above is
+written in the row convention, where the same transform reads $`\mathbf{C}\, h^{\text{AO}}\, \mathbf{C}^{\mathsf{T}}`$;
+`matfile.py` decides which one Gaussian handed it by testing both numerically,
+rather than trusting a storage convention, and normalises to the column one.
+
+The window is **0-based and half-open**: `act_start = NFIRST - 1` and
+`act_stop = NLAST` against the 1-based numbers in the Gaussian route. `ncore`
+and `nact` are stored redundantly, and validation requires all three to agree,
+so a window that does not mean what the route meant cannot pass quietly.
+
+Fock matrices are stored in the **AO** basis, so that a rotation of the active
+space never has to touch them. `hamiltonian.py` does the
+$`\mathbf{C}^{\mathsf{T}} F \mathbf{C}`$ transform.
+
+A **KS bundle never carries a stored Fock matrix at all.** `matfile.py` refuses
+to read the KS matrix into `fock_ao_*`, so a KS bundle arrives with
+`fock_source = "none"` and the rebuilt-Fock path is the only way to use it.
+Validation rejects a KS reference together with `fock_source = "gaussian"` as a
+second line of defence.
+
+`provenance` carries the Gaussian filename, the route line, basis and method
+where known, the 1-based window as Gaussian saw it, the Git commit, the schema
+version, and whether the Fock matrix came from Gaussian or was rebuilt through
+PySCF.
+
+## Using it
+
+```bash
+g16dump extract JOB.mat --fch JOB.fch --reference ROHF --window 6 40 --out JOB.npz
+g16dump validate JOB.npz --hamiltonian     # builds h', checks E_ref against E_scf
+g16dump dump JOB.npz --out FCIDUMP --dice-nocc
+g16dump rotate JOB.npz --random 1 --out rotated.npz
+```
+
+`--reference` is required and is never inferred. `--window` may be omitted, in
+which case the partition the `.mat` reports is used; either way it is
+cross-checked against the dimension of the two-electron block that is actually
+present, and a disagreement stops the run.
+
+Always run `validate --hamiltonian` before dumping. It is the step that catches
+a Roothaan operator or a Kohn-Sham matrix, and it costs a second.
+
+The FCIDUMP carries only the format. Provenance is written beside it as
+`FCIDUMP.provenance.json`, because FCIDUMP has no comment syntax and every way
+of smuggling one in breaks some reader: above the namelist, a `/` in a path or
+a date can truncate the header; below the last record, a parser that reads every
+remaining line as an integral fails on it.
+
+`--threshold` omits small two-electron integrals. It defaults to `0.0` and
+should usually stay there: the damage is neither proportional to the threshold
+nor smooth. For the CH2 fixture, `1e-2` leaves `E_ref` untouched to 1e-14 while
+`1e-1` costs 0.2 Ha, so a value that looks harmless on one system says nothing
+about the next.
+
+`rotate` mixes the active orbitals among themselves, which cannot change any
+energy — making it the cheapest real test of a result. Dump both, run the
+solver twice, and the correlated energies must agree. A rotation that mixes
+occupied with virtual orbitals is refused, because that replaces the reference
+determinant rather than re-expressing it; see `g16dump/rotate.py`.
+
+[`examples/`](examples/) has a complete Dice `input.dat` and a runnable Block2
+DMRG script.
+
+## KS warning
+
+**For Kohn–Sham orbitals the stored KS matrix contains exchange–correlation and
+must never be used as $`f^{\sigma}`$.** The active-space Hamiltonian is always the *HF*
+Hamiltonian evaluated in the KS orbitals. A KS bundle fed to the stored-Fock
+path raises; use the rebuilt-Fock path. This warning is repeated in the CLI.
+
+## Not in v1
+
+\alpha`$ and # g16dump
+
+[![CI](https://github.com/lgutsev/FCIDUMP_Exporter/actions/workflows/ci.yml/badge.svg)](https://github.com/lgutsev/FCIDUMP_Exporter/actions/workflows/ci.yml)
+
+Solver-agnostic FCIDUMP files for large-active-space solvers such as DMRG
+(Block2) and SHCI (Dice), built from a Gaussian 16 matrix-element file without
+ever transforming integrals over the full MO space.
+
+Gaussian transforms the two-electron integrals over the active window only. The
+frozen core is folded analytically into an effective one-electron Hamiltonian
+`h'` and a scalar `E_core`. This takes seconds where a full-space dump takes
+days.
+
+**Status: the pipeline is complete from the `.npz` bundle onward and tested;
+`extract` has not yet read a real `.mat`.** The bundle, the open-shell
+frozen-core algebra, the FCIDUMP writer and the active-space rotations are all
+implemented, with the reference energy reproduced to 1e-9 Ha through an
+independent read-back and through PySCF. What remains unverified is the front
+door: the Gaussian route section in `gaussian/` and the matrix-element labels
+are still unconfirmed against a real Gaussian run. See [Project status](#project-status).
+
+## Current goal and scope
+
+This repository is **not** a Dice workflow and it is **not** intended to grow
+into a general multireference electronic-structure package. Its job is narrower:
+
+> **Gaussian 16 windowed integrals -> validated active-space Hamiltonian ->
+> solver-ready FCIDUMP.**
+
+The FCIDUMP is the product. The downstream solver is deliberately replaceable.
+Block2/DMRG and Dice/SHCI are current consumers and independent cross-checks,
+not architectural dependencies.
+
+### What we are doing right now
+
+The code is effectively **feature-frozen for v1 until M0 is closed**. The next
+work is empirical validation, not more infrastructure:
+
+1. run the real Gaussian smoke-test suite in `gaussian/run_probes.sh`;
+2. establish the actual `.mat` labels, window dimensions and RHF/ROHF/RKS
+   Fock-matrix behaviour;
+3. pass those files through `extract -> validate -> dump`;
+4. compare the resulting Hamiltonians against the independent PySCF oracle;
+5. read the same real Gaussian-derived FCIDUMP with Block2 and Dice where
+   practical, and use allowed active-space rotations as a solver-level
+   invariance check;
+6. only change the implementation if one of those real tests exposes a defect.
+
+Do **not** add new readers, abstractions, result databases, solver wrappers,
+or additional polishing merely because they are possible. Those are outside
+the present scope unless real validation reveals a concrete need.
+
+### Scientific target after validation
+
+The immediate scientific use is the **Fe analogue of the intramolecular
+porphyrin "record-player" spin switch** that motivated earlier work on this
+workflow. The legacy Gaussian-to-Dice route existed before there was a
+production-quality large-active-space calculation behind it; this repository is
+the missing correctness layer needed to revisit that problem properly.
+
+The intended progression is:
+
+- use Fe/Ni porphine-scale jobs as regression and stress tests of the exporter;
+- recover the real Fe record-player geometries and build a **physically
+  motivated** active-space ladder rather than inheriting the old CAS(22,21)
+  window as a production choice;
+- treat the relevant Fe spin manifold explicitly, including the quintet where
+  chemically appropriate;
+- use **Block2/DMRG as the leading production candidate**, with Dice/SHCI as an
+  independent check on selected cases when useful;
+- add a defensible dynamic-correlation treatment downstream if quantitative
+  spin-state energetics require it.
+
+Active-space selection, DMRG/SHCI convergence strategy, orbital optimization and
+dynamic correlation are **scientific workflow responsibilities downstream of
+this package**. They must not be silently folded into the exporter itself.
+
+The stopping condition for this repository is therefore simple: once real
+Gaussian extraction is validated end-to-end, independent consumers agree, and
+the release metadata is complete, v1 is done. At that point effort should move
+to the Fe record-player calculations rather than continued exporter expansion.
+
+## Why this exists
+
+An earlier set of scripts (kept verbatim in `legacy/`) implemented this idea for
+closed shells. The algebra in them is wrong for open shells, because they assume
+the MO Fock matrix is diagonal with orbital energies on the diagonal:
+
+```python
+me.MOE  = me.matlist["ALPHA ORBITAL ENERGIES"].expand().copy()
+me.MOEd = np.diag(me.MOE)
+h1e_act = me.MOEd[ncore:iact, ncore:iact]     # <- f assumed diagonal
+```
+
+That holds for canonical RHF and for nothing else. It is false for ROHF, and
+false for Kohn–Sham orbitals (the KS matrix is not the HF Fock matrix). The
+symptom is visible in the shipped dumps: `legacy/FePorph_3_Window.dat` puts the
+triplet reference 0.67 Ha *below* the singlet in `legacy/FePorph_1_Window.dat`,
+which is impossible. The two files also differ in `E_core` by 0.48 Ha, and 186
+of the 210 one-electron off-diagonals in each are exactly zero — the fingerprint
+of a `h'` whose only off-diagonal content comes from the J/K correction, because
+the Fock off-diagonals were never there. All three numbers are measured from the
+committed files by `tests/test_legacy_regression.py`.
+
+Those two jobs were almost certainly **UHF**, not RHF or ROHF: the legacy writer
+reads `AA`, `BA` and `BB MO 2E INTEGRALS`, and three blocks is the unrestricted
+form — a restricted job writes only `AA`. `legacy/Template.py` calls `scf.UHF`
+as well. That makes the original approach stranger still, since a spin-restricted
+FCIDUMP assumes one set of spatial orbitals and UHF has two.
+
+`legacy/FCIDUMP_Write_MOe_3.py` is separately inconsistent with itself: it builds
+$`E_{\text{core}}`$ from both the $`\alpha`$ and $`\beta`$ one-electron blocks, then
+writes only the $`\alpha`$ block.
+
+**The fix:** build $`h'`$ from the full MO Fock matrices $`f^{\alpha}`$ and $`f^{\beta}`$,
+off-diagonals included, with one code path for RHF and ROHF. Not from orbital
+energies, and not with `ak`/`bk`/`ck` coupling coefficients — that approach has
+already been tried and failed.
+
+## The math
+
+Spatial orbitals are shared by $`\alpha`$ and $`\beta`$ (RHF/ROHF), and integrals
+are in chemist's notation $`(pq|rs)`$. Three orbital sets matter:
+
+| Symbol | Meaning |
+|---|---|
+| $`\mathcal{C}`$ | the frozen-core orbitals, doubly occupied |
+| $`\mathcal{A}`$ | the active orbitals, i.e. Gaussian's window |
+| $`\mathcal{O}_\sigma \subset \mathcal{A}`$ | the active orbitals occupied in the reference determinant for spin $`\sigma`$ — by index order, the first $`n_\sigma - n_{\text{core}}`$ of them |
+
+$`\mathbf{C}`$, upright and bold, is the matrix of MO coefficients; $`\mathcal{C}`$,
+script, is the frozen-core set. They are different objects and the distinction
+matters in every expression below.
+
+Three cheap inputs, none of them a full-space transform:
+
+```math
+\begin{aligned}
+h_{pq} &= \mathbf{C}\, h^{\text{AO}}\, \mathbf{C}^{\mathsf{T}}
+  &&\text{over all MOs, } O(N^3) \\
+f^{\sigma}_{pq} &= \mathbf{C}\, F^{\sigma,\text{AO}}\, \mathbf{C}^{\mathsf{T}}
+  &&\text{over all MOs, } O(N^3) \\
+(tu|vw) && \text{for } t,u,v,w \in \mathcal{A} \text{ only, from the window}
+\end{aligned}
+```
+
+### Effective one-electron Hamiltonian
+
+For each spin $`\sigma`$, over the full active block — a matrix, not a diagonal:
+
+```math
+h'_{tu} = f^{\sigma}_{tu}
+  - \sum_{k \in \mathcal{O}_{\sigma}} \Big[ (tu|kk) - (tk|ku) \Big]
+  - \sum_{k \in \mathcal{O}_{\bar{\sigma}}} (tu|kk)
+```
+
+This is exact when $`f^{\sigma}`$ is the UHF-type Fock operator built from the
+reference determinant's densities,
+
+```math
+F^{\sigma} = H + J\big[P^{\alpha} + P^{\beta}\big] - K\big[P^{\sigma}\big]
+```
+
+The result is spin-independent, so the $`\alpha`$ and $`\beta`$ expressions must
+agree — which gives a free internal check:
+
+```math
+\max_{tu} \left| h'^{(\alpha)}_{tu} - h'^{(\beta)}_{tu} \right| < 10^{-8}
+```
+
+If that fails for ROHF, the stored Fock is Gaussian's Roothaan *effective*
+operator rather than $`f^{\alpha}`$/$`f^{\beta}`$. **Do not average the two.**
+Disagreement is a bug signal; switch to the rebuilt-Fock path below.
+
+The gate behaves as designed on a Roothaan operator. Handed one for CH2/6-31G
+it rejects the input by 0.652 Ha, while the same job's genuine
+$`f^{\alpha}`$/$`f^{\beta}`$ agree to $`7 \times 10^{-15}`$. Which of the two a
+Gaussian `.mat` actually carries is still the M0 question, and the answer
+changes nothing in the code: a Roothaan operator is rejected either way, and
+the rebuilt-Fock path is there either way.
+
+### Reference, active and core energies
+
+```math
+E_{\text{ref}} = E_{\text{nuc}}
+  + \frac{1}{2} \sum_{\sigma} \sum_{i \in \mathcal{C} \cup \mathcal{O}_{\sigma}}
+    \Big( h_{ii} + f^{\sigma}_{ii} \Big)
+```
+
+```math
+E_{\text{act}} = \sum_{\sigma} \sum_{t \in \mathcal{O}_{\sigma}} h'_{tt}
+  + \frac{1}{2} \sum_{\sigma} \sum_{t,u \in \mathcal{O}_{\sigma}}
+    \Big[ (tt|uu) - (tu|ut) \Big]
+  + \sum_{t \in \mathcal{O}_{\alpha}} \sum_{u \in \mathcal{O}_{\beta}} (tt|uu)
+```
+
+```math
+E_{\text{core}} = E_{\text{ref}} - E_{\text{act}}
+```
+
+$`E_{\text{core}}`$ is a *residual*, not an independent quantity, and that has a
+consequence worth knowing: an error in the active two-electron integrals moves
+$`E_{\text{act}}`$ and $`E_{\text{core}}`$ by equal and opposite amounts, so
+$`E_{\text{ref}}`$ recovered from a FCIDUMP cannot see it. The test suite checks
+the two separately for exactly this reason.
+
+### Reduction to the closed-shell case
+
+For RHF, $`\mathcal{O}_{\alpha} = \mathcal{O}_{\beta} = \mathcal{O}`$ and
+$`f^{\alpha} = f^{\beta} = f`$, so the two sums over $`\mathcal{O}_{\sigma}`$ and
+$`\mathcal{O}_{\bar{\sigma}}`$ collapse:
+
+```math
+\begin{aligned}
+h'_{tu} &= f_{tu}
+  - \sum_{k \in \mathcal{O}} \Big[ (tu|kk) - (tk|ku) \Big]
+  - \sum_{k \in \mathcal{O}} (tu|kk) \\
+&= f_{tu} - 2 \sum_{k \in \mathcal{O}} (tu|kk) + \sum_{k \in \mathcal{O}} (tk|ku)
+\end{aligned}
+```
+
+which is exactly the legacy closed-shell expression
+
+```python
+h1e_act -= 2*np.einsum('acbb->ac', h2e[:nact, :nact, :nact_2e, :nact_2e])
+h1e_act += np.einsum('abbc->ac', h2e[:nact, :nact_2e, :nact_2e, :nact])
+```
+
+with the single difference that $`f_{tu}`$ is the full Fock matrix here and
+$`\mathrm{diag}(\varepsilon)`$ there. The two agree only when the orbitals
+are canonical RHF. This equivalence is asserted numerically by the full-space
+and legacy-regression tests, not just claimed here.
+
+### Rebuilt-Fock fallback
+
+Required when the `.mat` carries no usable HF-type Fock matrix, and **always**
+required for KS orbitals:
+
+1. Load the molecule from the matching `.fch` with MOKIT's `load_mol_from_fch`.
+2. Build $`P^{\alpha}`$, $`P^{\beta}`$ from the Gaussian orbitals and occupations.
+3. One PySCF JK build:
+   $`F^{\sigma} = H + J[P^{\alpha} + P^{\beta}] - K[P^{\sigma}]`$.
+   One Fock build, far cheaper than an `ao2mo`.
+4. Feed the result into the same functions as above.
+
+Step 1 is the only part that needs MOKIT, and it is separable:
+`hamiltonian.with_rebuilt_fock(bundle, mol)` takes any PySCF `Mole`, so the path
+can be exercised, and a molecule supplied, without MOKIT present.
+
+`pyscf` and `mokit` become runtime dependencies for this mode only. They are
+imported lazily, and their absence is reported as a clear error rather than a
+traceback. MOKIT is not installable from PyPI.
+
+## The bundle
+
+`matfile.py` runs where gauopen lives and emits one `.npz`; everything
+downstream reads only that. The schema is version `1`:
+
+| Key | Type | Meaning |
+|---|---|---|
+| `schema_version` | int | `1` |
+| `reference` | str | `RHF`, `ROHF`, `RKS` or `ROKS` |
+| `charge`, `multiplicity` | int | |
+| `nelec`, `nalpha`, `nbeta` | int | |
+| `nao`, `nmo` | int | AO and MO counts |
+| `ncore`, `nact` | int | frozen core and active orbital counts |
+| `act_start`, `act_stop` | int | the active window, 0-based and half-open |
+| `e_nuc` | float | nuclear repulsion |
+| `mo_coeff` | (nao, nmo) | |
+| `overlap`, `hcore_ao` | (nao, nao) | |
+| `eri_act` | (nact,)×4 | chemist's `(tu|vw)`, MO basis, active window only |
+| `fock_source` | str | `gaussian`, `pyscf_rebuilt` or `none` |
+| `provenance` | str | JSON |
+
+Optional, and absent rather than null when unknown: `fock_ao_alpha`,
+`fock_ao_beta`, `mo_energy_alpha`, `mo_energy_beta`, `e_scf`, `atom_charges`.
+
+Four conventions are worth knowing before writing against it.
+
+`mo_coeff` is stored **column-wise**, `mo_coeff[ao, mo]`, so that $`\mathbf{C}^{\mathsf{T}} \mathbf{S} \mathbf{C} = \mathbf{I}`$.
+That is PySCF's convention, and every oracle here is PySCF. The algebra above is
+written in the row convention, where the same transform reads $`\mathbf{C}\, h^{\text{AO}}\, \mathbf{C}^{\mathsf{T}}`$;
+`matfile.py` decides which one Gaussian handed it by testing both numerically,
+rather than trusting a storage convention, and normalises to the column one.
+
+The window is **0-based and half-open**: `act_start = NFIRST - 1` and
+`act_stop = NLAST` against the 1-based numbers in the Gaussian route. `ncore`
+and `nact` are stored redundantly, and validation requires all three to agree,
+so a window that does not mean what the route meant cannot pass quietly.
+
+Fock matrices are stored in the **AO** basis, so that a rotation of the active
+space never has to touch them. `hamiltonian.py` does the
+$`\mathbf{C}^{\mathsf{T}} F \mathbf{C}`$ transform.
+
+A **KS bundle never carries a stored Fock matrix at all.** `matfile.py` refuses
+to read the KS matrix into `fock_ao_*`, so a KS bundle arrives with
+`fock_source = "none"` and the rebuilt-Fock path is the only way to use it.
+Validation rejects a KS reference together with `fock_source = "gaussian"` as a
+second line of defence.
+
+`provenance` carries the Gaussian filename, the route line, basis and method
+where known, the 1-based window as Gaussian saw it, the Git commit, the schema
+version, and whether the Fock matrix came from Gaussian or was rebuilt through
+PySCF.
+
+## Using it
+
+```bash
+g16dump extract JOB.mat --fch JOB.fch --reference ROHF --window 6 40 --out JOB.npz
+g16dump validate JOB.npz --hamiltonian     # builds h', checks E_ref against E_scf
+g16dump dump JOB.npz --out FCIDUMP --dice-nocc
+g16dump rotate JOB.npz --random 1 --out rotated.npz
+```
+
+`--reference` is required and is never inferred. `--window` may be omitted, in
+which case the partition the `.mat` reports is used; either way it is
+cross-checked against the dimension of the two-electron block that is actually
+present, and a disagreement stops the run.
+
+Always run `validate --hamiltonian` before dumping. It is the step that catches
+a Roothaan operator or a Kohn-Sham matrix, and it costs a second.
+
+The FCIDUMP carries only the format. Provenance is written beside it as
+`FCIDUMP.provenance.json`, because FCIDUMP has no comment syntax and every way
+of smuggling one in breaks some reader: above the namelist, a `/` in a path or
+a date can truncate the header; below the last record, a parser that reads every
+remaining line as an integral fails on it.
+
+`--threshold` omits small two-electron integrals. It defaults to `0.0` and
+should usually stay there: the damage is neither proportional to the threshold
+nor smooth. For the CH2 fixture, `1e-2` leaves `E_ref` untouched to 1e-14 while
+`1e-1` costs 0.2 Ha, so a value that looks harmless on one system says nothing
+about the next.
+
+`rotate` mixes the active orbitals among themselves, which cannot change any
+energy — making it the cheapest real test of a result. Dump both, run the
+solver twice, and the correlated energies must agree. A rotation that mixes
+occupied with virtual orbitals is refused, because that replaces the reference
+determinant rather than re-expressing it; see `g16dump/rotate.py`.
+
+[`examples/`](examples/) has a complete Dice `input.dat` and a runnable Block2
+DMRG script.
+
+## KS warning
+
+**For Kohn–Sham orbitals the stored KS matrix contains exchange–correlation and
+must never be used as $`f^{\sigma}`$.** The active-space Hamiltonian is always the *HF*
+Hamiltonian evaluated in the KS orbitals. A KS bundle fed to the stored-Fock
+path raises; use the rebuilt-Fock path. This warning is repeated in the CLI.
+
+## Not in v1
+
+\beta`$ orbitals). This
+  exporter targets a common spatial-orbital representation. For unrestricted
+  calculations, first transform to a compatible common-orbital representation
+  (for example, natural orbitals) before export.
 - **ORCA input.** Possible later through the same bundle format.
 - **Orbital optimization (SHCISCF) across the core/active boundary.** That needs
   integrals from outside the window; use PySCF for it.
