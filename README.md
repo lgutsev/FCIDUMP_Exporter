@@ -2,8 +2,9 @@
 
 [![CI](https://github.com/lgutsev/FCIDUMP_Exporter/actions/workflows/ci.yml/badge.svg)](https://github.com/lgutsev/FCIDUMP_Exporter/actions/workflows/ci.yml)
 
-FCIDUMP files for SHCI (Dice) and DMRG (Block2), built from a Gaussian 16
-matrix-element file without ever transforming integrals over the full MO space.
+Solver-agnostic FCIDUMP files for large-active-space solvers such as DMRG
+(Block2) and SHCI (Dice), built from a Gaussian 16 matrix-element file without
+ever transforming integrals over the full MO space.
 
 Gaussian transforms the two-electron integrals over the active window only. The
 frozen core is folded analytically into an effective one-electron Hamiltonian
@@ -17,6 +18,67 @@ implemented, with the reference energy reproduced to 1e-9 Ha through an
 independent read-back and through PySCF. What remains unverified is the front
 door: the Gaussian route section in `gaussian/` and the matrix-element labels
 are still unconfirmed against a real Gaussian run. See [Project status](#project-status).
+
+## Current goal and scope
+
+This repository is **not** a Dice workflow and it is **not** intended to grow
+into a general multireference electronic-structure package. Its job is narrower:
+
+> **Gaussian 16 windowed integrals -> validated active-space Hamiltonian ->
+> solver-ready FCIDUMP.**
+
+The FCIDUMP is the product. The downstream solver is deliberately replaceable.
+Block2/DMRG and Dice/SHCI are current consumers and independent cross-checks,
+not architectural dependencies.
+
+### What we are doing right now
+
+The code is effectively **feature-frozen for v1 until M0 is closed**. The next
+work is empirical validation, not more infrastructure:
+
+1. run the real Gaussian smoke-test suite in `gaussian/run_probes.sh`;
+2. establish the actual `.mat` labels, window dimensions and RHF/ROHF/RKS
+   Fock-matrix behaviour;
+3. pass those files through `extract -> validate -> dump`;
+4. compare the resulting Hamiltonians against the independent PySCF oracle;
+5. read the same real Gaussian-derived FCIDUMP with Block2 and Dice where
+   practical, and use allowed active-space rotations as a solver-level
+   invariance check;
+6. only change the implementation if one of those real tests exposes a defect.
+
+Do **not** add new readers, abstractions, result databases, solver wrappers,
+UHF-FCIDUMP variants, or additional polishing merely because they are possible.
+Those are post-v1 questions.
+
+### Scientific target after validation
+
+The immediate scientific use is the **Fe analogue of the intramolecular
+porphyrin "record-player" spin switch** that motivated earlier work on this
+workflow. The legacy Gaussian-to-Dice route existed before there was a
+production-quality large-active-space calculation behind it; this repository is
+the missing correctness layer needed to revisit that problem properly.
+
+The intended progression is:
+
+- use Fe/Ni porphine-scale jobs as regression and stress tests of the exporter;
+- recover the real Fe record-player geometries and build a **physically
+  motivated** active-space ladder rather than inheriting the old CAS(22,21)
+  window as a production choice;
+- treat the relevant Fe spin manifold explicitly, including the quintet where
+  chemically appropriate;
+- use **Block2/DMRG as the leading production candidate**, with Dice/SHCI as an
+  independent check on selected cases when useful;
+- add a defensible dynamic-correlation treatment downstream if quantitative
+  spin-state energetics require it.
+
+Active-space selection, DMRG/SHCI convergence strategy, orbital optimization and
+dynamic correlation are **scientific workflow responsibilities downstream of
+this package**. They must not be silently folded into the exporter itself.
+
+The stopping condition for this repository is therefore simple: once real
+Gaussian extraction is validated end-to-end, independent consumers agree, and
+the release metadata is complete, v1 is done. At that point effort should move
+to the Fe record-player calculations rather than continued exporter expansion.
 
 ## Why this exists
 
@@ -379,6 +441,10 @@ writer and the rotations did not wait on it.
 Open questions blocking M0's gate are listed in
 [`gaussian/README.md`](gaussian/README.md) and in the probe script's output
 section.
+
+**Development rule while M0 is open:** do not expand scope. Treat the current
+implementation as the v1 candidate and let the real Gaussian smoke tests decide
+what, if anything, still needs to change.
 
 ## Credits and licensing
 
