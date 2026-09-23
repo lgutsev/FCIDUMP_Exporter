@@ -1,0 +1,19 @@
+%chk=probe_h2o_rks_631gs.chk
+%mem=2GB
+%nprocshared=1
+#P B3LYP/6-31G* 6D 7F NoSymm Int=NoBasisTransform SCF=(Conver=10)
+# Output=(MatrixElement,MO2ElectronIntegrals) Tran=(Full,Force) Window=(2,12)
+
+probe_h2o_rks_631gs: H2O RKS/B3LYP/6-31G* with Cartesian d (Gaussian's default
+6D for this basis), 1 frozen core, active MOs 2-12. The second MOKIT gate: SP
+shells and Cartesian d differ from PySCF in order and in per-function
+normalization, and a KS job always needs the rebuilt Fock matrices.
+Geometry as probe_h2o_rks.
+
+0 1
+O   0.0000000   0.0000000   0.1173000
+H   0.0000000   0.7572000  -0.4692000
+H   0.0000000  -0.7572000  -0.4692000
+
+probe_h2o_rks_631gs.mat
+

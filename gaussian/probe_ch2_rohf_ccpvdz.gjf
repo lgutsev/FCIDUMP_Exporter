@@ -1,0 +1,18 @@
+%chk=probe_ch2_rohf_ccpvdz.chk
+%mem=2GB
+%nprocshared=1
+#P ROHF/cc-pVDZ 5D 7F NoSymm Int=NoBasisTransform SCF=(Conver=10)
+# Output=(MatrixElement,MO2ElectronIntegrals) Tran=(Full,Force) Window=(2,13)
+
+probe_ch2_rohf_ccpvdz: CH2 triplet ROHF/cc-pVDZ (pure d), 1 frozen core, active
+MOs 2-13. The polarized-basis gate for the MOKIT bridge: Gaussian and PySCF order
+pure d functions differently, so this .mat/.fch pair only passes through
+g16dump rebuild-fock if the AO transformation is right. Geometry as probe_ch2_rohf.
+
+0 3
+C   0.0000000   0.0000000   0.1900000
+H   0.0000000   0.9900000  -0.5600000
+H   0.0000000  -0.9900000  -0.5600000
+
+probe_ch2_rohf_ccpvdz.mat
+

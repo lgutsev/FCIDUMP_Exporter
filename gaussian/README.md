@@ -138,6 +138,8 @@ back the archive; nothing else is needed.**
 | `probe_nh_rohf` | A second open shell, whose singly occupied orbitals are a degenerate pi pair. |
 | `probe_h2o_frozen_virtual` | The only job with frozen **virtuals** (`NFV=3`). No fixture and no other probe has ever exercised that path. |
 | `probe_h2o_rks` | Does a DFT job write a Fock-like matrix, and under what label? |
+| `probe_ch2_rohf_ccpvdz` | The MOKIT gate with pure d functions (cc-pVDZ, `5D 7F`): does the `.mat`/`.fch` pair pass `g16dump rebuild-fock`? |
+| `probe_h2o_rks_631gs` | The MOKIT gate with Cartesian d functions and SP shells (6-31G*, Gaussian's default `6D`), on a KS job. |
 
 ### Expected dimensions
 
@@ -155,6 +157,8 @@ A mismatch here is the first thing to notice, so check it before anything else.
 | `probe_nh_rohf` | 11 | 8 | 1 | 0 | 2-11 | 10 | 10000 |
 | `probe_h2o_frozen_virtual` | 13 | 10 | 1 | 3 | 2-10 | 9 | 6561 |
 | `probe_h2o_rks` | 13 | 10 | 1 | 0 | 2-13 | 12 | 20736 |
+| `probe_ch2_rohf_ccpvdz` | 24 | 8 | 1 | 0 | 2-13 | 12 | 20736 |
+| `probe_h2o_rks_631gs` | 19 | 10 | 1 | 0 | 2-12 | 11 | 14641 |
 
 Note the `.mat` stores the two-electron block packed as a triangle of triangles,
 not as `n**4` loose numbers, so `inspect_mat.py` will report a packing candidate
@@ -232,8 +236,12 @@ names `anoroostz`, so the original was not a Pople basis.
 Every probe geometry, basis and window matches a committed fixture in
 `tests/data/`, so each result is directly comparable to a number PySCF produced
 independently. Agreement to about 1e-6 Ha is right; the residual is SCF
-convergence, not method. No basis here has d functions, so there is no
-Cartesian/spherical ambiguity.
+convergence, not method.
+
+Gaussian and PySCF order the basis functions differently even without d
+functions: PySCF splits 6-31G's SP shells and sorts each atom's shells by
+angular momentum. Nothing here compares AO matrices across the two programs
+directly, and `g16dump rebuild-fock` converts through MOKIT; see Step 3.
 
 | Job | `E_nuc` | `E(SCF)` | `E_core` | fixture |
 |---|---|---|---|---|
@@ -242,6 +250,7 @@ Cartesian/spherical ambiguity.
 | `probe_nh_rohf` | 3.5447277287 | -54.9382261545 | -- | `nh_rohf` |
 | `probe_h2o_frozen_virtual` | 9.1895337629 | -75.9839744727 | -52.1215325375 | `h2o_frozen_virtual` |
 | `probe_h2o_rks` | 9.1895337629 | -76.3849509041 (DFT) | -- | `h2o_rks` |
+| `probe_ch2_rohf_ccpvdz` | 5.3800248517 | -38.8863647621 | -- | generated in `tests/gaussian_jobs.py` |
 
 For `probe_h2o_rks`, note that -76.3849509041 is the **DFT** total energy. The
 HF energy evaluated in those same KS orbitals is -75.9813320027, a different
@@ -275,7 +284,7 @@ are exactly three outcomes, and all three are useful:
 | What you see | What it means | What to do |
 |---|---|---|
 | `h' alpha/beta agreement` around 1e-15, and `E_scf ... (agrees)` | Gaussian stored genuine `F^α`/`F^β`. The stored-Fock path works. | Nothing. Record it and update the banner at the top of this file. |
-| `SpinConsistencyError`, deviation ~0.1–1 Ha, mentioning the Roothaan operator | Gaussian stored its effective ROHF operator. **Expected, and not a bug.** | Use the rebuilt-Fock path (`hamiltonian.with_rebuilt_fock`), which needs the `.fch`. |
+| `SpinConsistencyError`, deviation ~0.1–1 Ha, mentioning the Roothaan operator | Gaussian stored its effective ROHF operator. **Expected, and not a bug.** | Use the rebuilt-Fock path: `g16dump rebuild-fock JOB.npz --fch JOB.fch --out JOB_rebuilt.npz`. |
 | `open-shell reference ... but no beta Fock matrix is stored` | **The outcome the documentation predicts for ROHF.** `BETA FOCK MATRIX` is documented as written "for unrestricted SCF calculations", and ROHF is a *restricted* job, so it should write `ALPHA FOCK MATRIX` and no beta partner. The one stored matrix is then almost certainly the Roothaan effective operator. | Use the rebuilt-Fock path. This is not a missing label and not a bug. |
 | `no Fock matrix was found in the .mat` | The labels are spelled differently, or Gaussian does not write them at all. | Send the `.probe.json`; `matfile.LABELS` needs the real spelling. |
 
@@ -303,8 +312,9 @@ Both probe geometries and both windows are identical to the committed fixtures
 in `tests/data/`, so the Gaussian run can be checked directly against numbers
 PySCF produced independently. Agreement to about 1e-6 Ha is the right
 expectation — the residual is SCF convergence and integral thresholds, not
-method. Neither basis has d functions, so there is no Cartesian/spherical
-ambiguity to account for.
+method. Neither `validate` nor `dump` compares AO matrices between Gaussian and
+PySCF, so the AO ordering does not enter here; it enters only in `rebuild-fock`
+(Step 3).
 
 | Quantity | `probe_h2o_rhf` | `probe_ch2_rohf` |
 |---|---|---|
@@ -326,3 +336,24 @@ Once `validate --hamiltonian` reports agreement, the rest is already tested:
 ```bash
 g16dump dump probe_ch2_rohf.npz --out probe_ch2_rohf.FCIDUMP --dice-nocc
 ```
+
+## Step 3: the Gaussian -> MOKIT -> PySCF gate
+
+Every probe that writes a `.fch` can also go through the rebuilt-Fock path, and
+that path is where Gaussian's AO conventions meet PySCF's. On the machine that
+has gauopen and MOKIT, with the unpacked archive:
+
+```bash
+G16DUMP_GAUSSIAN_OUTPUTS=probe_results_<host>_<date> \
+PYTHONPATH=/path/to/gauopen:$PYTHONPATH \
+pytest -m gaussian tests/test_gaussian_outputs.py -rA -s
+```
+
+For each `.mat`/`.fch` pair it prints and checks: the overlap and core
+Hamiltonian mismatch before and after MOKIT's transfer, the orbital
+orthonormality in PySCF's overlap, the difference between the `.mat` orbitals
+and MOKIT's transfer of the `.fch` orbitals, `max|h'α - h'β|` for the rebuilt
+Fock matrices, `h'`, `E_core` and `E_ref` against a full-transform PySCF oracle,
+and `E_ref` against Gaussian's SCF energy for the Hartree–Fock jobs.
+`probe_ch2_rohf_ccpvdz` and `probe_h2o_rks_631gs` are the two with d functions.
+Until this has been run on real output, the gate is **unexecuted**.
