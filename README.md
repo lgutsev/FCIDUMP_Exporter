@@ -376,11 +376,14 @@ block: Dice numbers **spin** orbitals, so spatial orbital `i` (0-based) is alpha
 `2i` and beta `2i + 1`, and `nocc` counts electrons, not orbitals. The example
 README explains the whole file line by line.
 
-Dice is a compiled MPI program and is not installed here or in CI, so that
-example is checked against Dice's documented input format and against
-`legacy/input_back.dat` — an input written by hand for one of the legacy dumps,
-whose `nocc` block the generator reproduces exactly from the FCIDUMP header. It
-has not been run through Dice itself.
+This is checked by running Dice, built from source at commit `f0f0850`. With
+the committed `input.dat` on the CH2 triplet dump, the variational energy is
+−38.9500600620 Ha and the semistochastic PT gives −38.9500834200 ± 3.4e-06,
+bracketing the FCI value; tightening ε₁ to 1e-9 makes the variational space the
+full space and Dice returns −38.9500810680, which is PySCF's FCI and Block2's
+DMRG energy to the last digit any of them prints. H2O behaves the same way.
+Dice is not a dependency and CI does not have it — it needs a C++ compiler, MPI
+and Boost to build — so that run is a one-off check, not part of the suite.
 
 ## Using the output with Block2
 
@@ -526,7 +529,7 @@ needs any of these.
 | M0 | legacy inventory, `.mat` probe, route templates | probe and templates written; **waiting on cluster output** |
 | M1 | test systems + two independent oracles | done: H2O RHF, CH2/NH/O2 triplet ROHF, a rotated ROHF set and B3LYP orbitals, each checked against a full AO→MO transform written with explicit loops and importing nothing from `g16dump` |
 | M2 | `bundle.py`, `hamiltonian.py`, `write.py` + gates | done, with the schema, electron-count, window, Hermiticity, orthonormality, ERI-symmetry and α/β gates |
-| M3 | writer and solver interface | writer done, round-tripped through an independent parser and through PySCF's; Dice and Block2 examples in [`examples/`](examples/). The Block2 example **was run**, and matches an independent PySCF FCI to 4e-13. The Dice example **was not run** — Dice will not install here — and is checked against Dice's documented keywords and against `legacy/input_back.dat` |
+| M3 | writer and solver interface | writer done, round-tripped through an independent parser and through PySCF's; Dice and Block2 examples in [`examples/`](examples/), **both run against the real solvers**. Dice (built from source at `f0f0850`) and Block2 both reproduce an independent PySCF FCI on the CH2 and H2O dumps to the last digit they print |
 | M4 | active-space rotations | done, with the many-body spectrum checked before and after in a numpy-only FCI |
 | M5 | benchmarks | not started |
 | M6 | packaging, CI, DOI | **CI and packaging done** (3.9–3.13, numpy-only core enforced); LICENSE, CITATION.cff and DOI still open |
