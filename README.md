@@ -268,7 +268,47 @@ Two findings from building the tests, both now pinned by tests:
   stretched N2 in a randomly rotated basis it converges ~4.7e-4 Ha high. The
   invariance tests use `conv_tol=1e-12`, which brings the two to ~1e-11.
 
-The test suite (326 tests) runs with NumPy alone; the PySCF oracle tests are
+### Against MOKIT, and the reader end to end
+
+With MOKIT installed (`scripts/install_mokit_without_conda.sh` where there is
+no conda; `conda install mokit -c mokit -c conda-forge` where there is),
+`tests/test_extract.py` runs `matfile.extract` end to end: a stand-in for
+gauopen serves a `.mat` built from a PySCF calculation with every AO quantity
+in **Gaussian's** AO order, next to a real `.fch` written by MOKIT, for bases
+with d functions (6-31G*, def2-SVP, cc-pVDZ) and RHF, ROHF and RKS references.
+
+That test found a real bug, now fixed. Gaussian and PySCF order spherical
+d/f/g functions differently (`m = 0,+1,-1,+2,-2,...` vs `m = -l..+l`), and
+the reader mixed `.mat` quantities (Gaussian order) with integrals from the
+`.fch` molecule (PySCF order). s/p-only bases hide it. With d functions the
+orbitals were not even orthonormal against the `.fch` overlap
+(`max|CSC'-I| = 1.58` for H2O/6-31G*), and `--rebuild-fock` built densities in
+the wrong AO basis: **for a Kohn-Sham reference that produced an `h'` wrong by
+0.39 Ha with no error raised**, because KS has no SCF energy to check against.
+`g16dump/aoorder.py` now maps between the two orders; the permutation matches
+MOKIT's own reordering exactly for d, f and g functions (6-31G*, cc-pVTZ,
+def2-TZVP, cc-pVQZ, Ni/def2-SVP). Before using a `.fch`, `extract` checks
+that the `.mat` core Hamiltonian equals PySCF's after reordering, which catches
+a wrong `.fch` or a Cartesian basis as an O(1) mismatch. Reintroducing the bug
+makes all eight end-to-end cases fail. Cartesian 6D/10F functions are refused;
+the Gaussian templates now request `5D 7F`.
+
+A precision floor, measured rather than assumed: a `.fch` stores basis
+exponents and coefficients to 9 significant figures, so J and K rebuilt from
+it shift `E_ref` by ~1e-9 Ha for first-row molecules and **1.2-1.7e-7 Ha for
+Ni complexes** (NiH, NiCl4(2-), def2-SVP). That is irrelevant at SHCI/DMRG
+accuracy but above the 1e-8 `E_ref` gate, so for bundles whose Fock was rebuilt
+from a `.fch` (recorded in provenance) the default gate is 1e-5 Ha. Genuine
+errors, like the one above, are 1e-3 Ha and up. Every other path keeps 1e-8,
+and `--tol-scf` overrides either.
+
+MOKIT's `gen_fcidump` (Route A of the original plan) agrees with our dumps to
+1e-8-8e-8 on H2O, CH2 and O2, including d-function bases. It is *not* an
+independent check of the algebra -- internally it is PySCF's
+`CASCI.get_h1eff` again -- and the residual is the same `.fch` precision limit,
+so the original 1e-9 A-vs-B gate cannot be met through a `.fch`.
+
+The test suite (358 tests) runs with NumPy alone; the PySCF oracle tests are
 skipped when PySCF is absent. CI runs Python 3.9-3.13 NumPy-only, plus PySCF on
 3.10 and 3.12, and fails if a core module ever imports an optional dependency.
 
@@ -291,12 +331,18 @@ python3 -c "import QCMatEl; print(QCMatEl.__file__)"
 
 Only `g16dump extract` (i.e. `matfile.py`) needs it.
 
+MOKIT is needed only for `--rebuild-fock`, the overlap fallback, and the
+validation tests. On the cluster: `conda install mokit -c mokit -c conda-forge`.
+Without conda: `scripts/install_mokit_without_conda.sh`, which unpacks MOKIT's
+prebuilt package and puts its executables (`load_mol_from_fch` needs
+`bas_fch2py`) on `PATH`.
+
 ## Project status
 
 | Milestone | What it delivers | State |
 |---|---|---|
 | M0 | legacy inventory, `.mat` probe, route templates | probe and templates written; **waiting on the two cluster probe jobs** |
-| M1 | test systems + independent oracle | done with PySCF-generated systems; Gaussian-generated fixtures still pending M0 |
+| M1 | test systems + independent oracle | done with PySCF-generated systems, plus MOKIT `.fch` round trips; Gaussian-generated fixtures still pending M0 |
 | M2 | `bundle.py`, `hamiltonian.py`, `write.py` + gates | **gates pass** (table above) against PySCF; not yet on a real `.mat` |
 | M3 | writer and solver interface | writer, Dice/Block2 inputs done; solver output parsers unverified against real output |
 | M4 | active-space rotations | done; FCI invariance to ~1e-11 |
@@ -309,8 +355,12 @@ What is explicitly **not yet verified**, and why:
 - **The Fock-matrix labels in a `.mat`.** No legacy script reads one, so
   `matfile.py` searches rather than assumes, and falls back to
   `--rebuild-fock` when it finds nothing.
-- **`matfile.extract` end to end.** Tested only for importability and error
-  paths; it has never read a real `.mat`.
+- **`matfile.extract` on a real `.mat`.** It now runs end to end against a
+  synthetic `.mat` and a real MOKIT-written `.fch` (see above), but the gauopen
+  API details -- labels, packing, what `expand()` returns -- are still
+  assumptions until the probe output comes back.
+- **MOKIT in CI.** The MOKIT-dependent tests skip in CI; they have run only in
+  this development container.
 - **Dice and Block2 output parsers.** Written from documented formats; no real
   output was available to check them against.
 - **Porphyrin and legacy-Fe manifest entries.** Charge, spin, basis and window

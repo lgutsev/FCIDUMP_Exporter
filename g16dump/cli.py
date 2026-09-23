@@ -58,6 +58,13 @@ def _provenance_stamp(command: str, **extra) -> dict:
     return stamp
 
 
+def _scf_tolerance(args):
+    """None to skip, an explicit float, or "auto" (chosen per bundle)."""
+    if args.no_scf_check:
+        return None
+    return "auto" if args.tol_scf is None else args.tol_scf
+
+
 # ------------------------------------------------------------------ extract
 
 
@@ -108,7 +115,7 @@ def _load_hamiltonian_or_bundle(path: str, tol_spin: float, tol_scf: Optional[fl
 
 def cmd_dump(args) -> int:
     ash, provenance, bundle = _load_hamiltonian_or_bundle(
-        args.bundle, args.tol_spin, None if args.no_scf_check else args.tol_scf
+        args.bundle, args.tol_spin, _scf_tolerance(args)
     )
 
     orbsym = None
@@ -130,7 +137,15 @@ def cmd_dump(args) -> int:
     if "spin_error" in ash.diagnostics:
         print(f"  max|h'(alpha) - h'(beta)| = {ash.diagnostics['spin_error']:.3e}")
     if "scf_error" in ash.diagnostics:
-        print(f"  |E_ref - E_scf|           = {ash.diagnostics['scf_error']:.3e}")
+        print(
+            f"  |E_ref - E_scf|           = {ash.diagnostics['scf_error']:.3e}"
+            f"  (tolerance {ash.diagnostics['scf_tolerance']:.0e})"
+        )
+        if ash.diagnostics["scf_tolerance"] > 1e-8:
+            print(
+                "  note: Fock rebuilt from a .fch; its 9-digit basis data limits "
+                "E_ref to ~1e-7 Ha for transition metals, so the gate is 1e-5."
+            )
 
     if args.dice_input:
         write_dice_nocc(args.dice_input, ash)
@@ -182,7 +197,7 @@ def cmd_validate(args) -> int:
         ash = active_space_hamiltonian(
             bundle,
             tol_spin=args.tol_spin,
-            tol_scf=None if args.no_scf_check else args.tol_scf,
+            tol_scf=_scf_tolerance(args),
         )
         print("  active-space Hamiltonian:")
         print(f"    E_ref                      {ash.e_ref:.12f}")
@@ -202,7 +217,7 @@ def cmd_validate(args) -> int:
 
 def cmd_rotate(args) -> int:
     ash, provenance, _ = _load_hamiltonian_or_bundle(
-        args.bundle, args.tol_spin, None if args.no_scf_check else args.tol_scf
+        args.bundle, args.tol_spin, _scf_tolerance(args)
     )
 
     u = np.load(args.rotation)
@@ -298,7 +313,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="version", version=f"g16dump {__version__}")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    def _add_tolerances(p, scf_default=1e-8):
+    def _add_tolerances(p):
         p.add_argument(
             "--tol-spin",
             type=float,
@@ -308,8 +323,10 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument(
             "--tol-scf",
             type=float,
-            default=scf_default,
-            help="tolerance on |E_ref - E_scf| in Ha (default 1e-8)",
+            default=None,
+            help="tolerance on |E_ref - E_scf| in Ha (default: 1e-8, or 1e-5 "
+            "when the Fock was rebuilt from a .fch, whose 9-digit basis data "
+            "limits precision)",
         )
         p.add_argument(
             "--no-scf-check",

@@ -31,6 +31,7 @@ CORE_MODULES = [
     "g16dump.solvers",
     "g16dump.manifest",
     "g16dump.sweep",
+    "g16dump.aoorder",
 ]
 
 #: Dependencies that must not be pulled in by importing the core.

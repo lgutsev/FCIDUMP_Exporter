@@ -224,7 +224,9 @@ def gaussian_input(system: dict, *, memory: str = "8GB", nproc: int = 8) -> str:
     ``Output=MatrixElement`` to write the ``.mat``, ``Tran=Full`` with
     ``Window=`` so only the active block is transformed, ``NoSymm`` because the
     ``.fch`` orbital transfer assumes no symmetry reordering,
-    ``Int=NoBasisTransform`` so the ``.mat`` and ``.fch`` share an AO set, and
+    ``Int=NoBasisTransform`` so the ``.mat`` and ``.fch`` share an AO set,
+    ``5D 7F`` because g16dump refuses Cartesian d/f functions (their ordering
+    and normalization differ from PySCF's; see aoorder.py), and
     tight SCF convergence because the E_ref gate is at 1e-8 Ha.
 
     The route remains UNVERIFIED until a real Gaussian job has run -- see
@@ -243,7 +245,7 @@ def gaussian_input(system: dict, *, memory: str = "8GB", nproc: int = 8) -> str:
         f"%chk={name}.chk",
         f"%mem={memory}",
         f"%nprocshared={nproc}",
-        f"#P {method}/{system['basis']} NoSymm Int=NoBasisTransform "
+        f"#P {method}/{system['basis']} 5D 7F NoSymm Int=NoBasisTransform "
         f"SCF=(Conver=10)",
         f"# Output=MatrixElement Tran=Full Window=({first},{last})",
         "",

@@ -229,3 +229,41 @@ def test_active_reference_energy_with_no_electrons_is_zero():
     h = np.eye(3)
     eri = np.zeros((3, 3, 3, 3))
     assert active_reference_energy(h, eri, 0, 0) == 0.0
+
+
+def test_default_scf_tolerance_follows_provenance():
+    """1e-8 normally; 1e-5 only when the Fock was rebuilt from a .fch."""
+    from g16dump.hamiltonian import (
+        DEFAULT_SCF_TOLERANCE,
+        FCH_REBUILT_SCF_TOLERANCE,
+        default_scf_tolerance,
+    )
+
+    bundle = make_system(nbasis=8, nalpha=5, nbeta=3, ncore=1, seed=18).bundle
+    assert default_scf_tolerance(bundle) == DEFAULT_SCF_TOLERANCE == 1e-8
+
+    flagged = dataclasses.replace(
+        bundle, provenance={**bundle.provenance, "fock_rebuilt_from_fch": True}
+    )
+    assert default_scf_tolerance(flagged) == FCH_REBUILT_SCF_TOLERANCE == 1e-5
+
+
+def test_auto_tolerance_is_applied_and_recorded():
+    system = make_system(nbasis=8, nalpha=5, nbeta=3, ncore=1, seed=19)
+    ash = active_space_hamiltonian(system.bundle, tol_scf=None)
+    off_by_1e7 = dataclasses.replace(system.bundle, e_scf=ash.e_ref + 1e-7)
+
+    # Default provenance: 1e-7 is too much.
+    with pytest.raises(ConsistencyError):
+        active_space_hamiltonian(off_by_1e7)
+
+    # Rebuilt from a .fch: 1e-7 is the measured precision floor, accepted.
+    flagged = dataclasses.replace(
+        off_by_1e7, provenance={"fock_rebuilt_from_fch": True}
+    )
+    result = active_space_hamiltonian(flagged)
+    assert result.diagnostics["scf_tolerance"] == 1e-5
+
+    # An explicit tolerance always wins over the provenance.
+    with pytest.raises(ConsistencyError):
+        active_space_hamiltonian(flagged, tol_scf=1e-8)

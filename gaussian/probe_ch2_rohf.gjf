@@ -1,7 +1,7 @@
 %chk=probe_ch2_rohf.chk
 %mem=2GB
 %nprocshared=1
-#P ROHF/6-31G NoSymm Int=NoBasisTransform SCF=(Conver=10)
+#P ROHF/6-31G 5D 7F NoSymm Int=NoBasisTransform SCF=(Conver=10)
 # Output=MatrixElement Tran=Full Window=(2,13)
 
 probe_ch2_rohf: CH2 triplet ROHF/6-31G, 1 frozen core, active MOs 2-13

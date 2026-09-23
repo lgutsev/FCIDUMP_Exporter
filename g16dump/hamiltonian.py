@@ -76,6 +76,23 @@ from .errors import (
 #: Default tolerance for max|h'(alpha) - h'(beta)|, in Hartree.
 DEFAULT_SPIN_TOLERANCE = 1e-8
 
+#: Default tolerance for |E_ref - E_scf|, in Hartree.
+DEFAULT_SCF_TOLERANCE = 1e-8
+
+#: The same, when the Fock matrices were rebuilt from a basis read out of a
+#: .fch. Its 9-significant-figure exponents put a floor under E_ref of ~1e-9 Ha
+#: for small molecules and ~1-2e-7 Ha for Ni complexes (measured; see
+#: matfile.py). Genuine errors -- wrong AO order, wrong density -- are 1e-3 Ha
+#: and up, so 1e-5 still separates the two cleanly.
+FCH_REBUILT_SCF_TOLERANCE = 1e-5
+
+
+def default_scf_tolerance(bundle: Bundle) -> float:
+    """The E_ref gate tolerance this bundle's provenance justifies."""
+    if bundle.provenance.get("fock_rebuilt_from_fch"):
+        return FCH_REBUILT_SCF_TOLERANCE
+    return DEFAULT_SCF_TOLERANCE
+
 
 @dataclass
 class ActiveSpaceHamiltonian:
@@ -132,7 +149,12 @@ def build_fock_dense(
 
 
 def rebuild_fock_with_pyscf(
-    mol, c_a: np.ndarray, c_b: np.ndarray, nalpha: int, nbeta: int
+    mol,
+    c_a: np.ndarray,
+    c_b: np.ndarray,
+    nalpha: int,
+    nbeta: int,
+    h_ao: Optional[np.ndarray] = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Rebuild the *HF* Fock matrices for the given orbitals using PySCF's JK.
 
@@ -141,7 +163,13 @@ def rebuild_fock_with_pyscf(
     exchange-correlation and is not a Fock operator at all. The orbitals are
     used as given; only the two-electron operators are rebuilt.
 
-    ``c_a``/``c_b`` are MO-major ``(nmo, nbasis)``, this package's convention.
+    ``c_a``/``c_b`` are MO-major ``(nmo, nbasis)``, this package's convention,
+    and must be in *PySCF's* AO order -- see ``g16dump.aoorder``.
+
+    ``h_ao`` is the core Hamiltonian to use, in the same AO order. Pass the one
+    the bundle stores whenever there is one, so ``F`` and ``h`` are guaranteed
+    to share it; otherwise PySCF's ``get_hcore`` is used, which includes ECP
+    terms (plain kinetic + nuclear integrals would silently drop them).
     """
     try:
         from pyscf import scf  # noqa: F401  (imported for its side effects too)
@@ -156,9 +184,11 @@ def rebuild_fock_with_pyscf(
     p_a = density_matrix(np.asarray(c_a), nalpha)
     p_b = density_matrix(np.asarray(c_b), nbeta)
 
-    h_ao = mol.intor_symmetric("int1e_kin") + mol.intor_symmetric("int1e_nuc")
-    # get_jk on a stacked density returns J and K for each, in one pass.
     from pyscf.scf import hf
+
+    if h_ao is None:
+        h_ao = hf.get_hcore(mol)
+    # get_jk on a stacked density returns J and K for each, in one pass.
 
     j_mats, k_mats = hf.get_jk(mol, np.array([p_a, p_b]), hermi=1)
     j_total = j_mats[0] + j_mats[1]
@@ -179,6 +209,14 @@ def load_mol_from_fch(fchname: str):
                 f"`pip install 'g16dump[validate]'`. It is only needed for the "
                 f"rebuilt-Fock path and for the validation oracles."
             ) from exc
+    # MOKIT writes the basis to a generated module named gau<random 1..10000>
+    # and imports it. If that name was already imported in this process, the
+    # import cache returns the *previous* molecule. Purge them first.
+    import re
+    import sys
+
+    for name in [n for n in sys.modules if re.fullmatch(r"gau\d+", n)]:
+        del sys.modules[name]
     return _load(fchname)
 
 
@@ -285,7 +323,7 @@ def active_space_hamiltonian(
     bundle: Bundle,
     *,
     tol_spin: float = DEFAULT_SPIN_TOLERANCE,
-    tol_scf: Optional[float] = 1e-8,
+    tol_scf="auto",
 ) -> ActiveSpaceHamiltonian:
     """Build ``h'``, ``E_core`` and ``E_ref`` for a bundle.
 
@@ -295,8 +333,14 @@ def active_space_hamiltonian(
     ``tol_scf`` bounds ``|E_ref - E_scf|`` when the bundle carries an SCF energy.
     This is the single check that would have caught the legacy triplet bug. Pass
     ``None`` to skip it (for orbitals that deliberately do not solve any SCF
-    equations, such as the rotated-orbital tests).
+    equations, such as the rotated-orbital tests). The default, ``"auto"``, is
+    :data:`DEFAULT_SCF_TOLERANCE` unless the Fock matrices were rebuilt from a
+    ``.fch``, where the file's limited precision justifies
+    :data:`FCH_REBUILT_SCF_TOLERANCE`; the choice is recorded in the
+    diagnostics.
     """
+    if tol_scf == "auto":
+        tol_scf = default_scf_tolerance(bundle)
     if bundle.is_ks and bundle.fock_source == "gaussian":
         raise ReferenceTypeError(
             f"reference type {bundle.ref_type} is Kohn-Sham, but this bundle's "
@@ -365,6 +409,7 @@ def active_space_hamiltonian(
     if bundle.e_scf is not None:
         scf_error = abs(e_ref - bundle.e_scf)
         diagnostics["scf_error"] = scf_error
+        diagnostics["scf_tolerance"] = tol_scf
         if tol_scf is not None and scf_error > tol_scf:
             raise ConsistencyError(
                 f"the reference determinant energy rebuilt from h and f, "

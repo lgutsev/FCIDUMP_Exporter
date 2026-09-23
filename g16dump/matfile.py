@@ -284,6 +284,31 @@ def extract(
         matlist[LABEL_CORE_HAMILTONIAN].expand(), nbasis, LABEL_CORE_HAMILTONIAN
     )
 
+    # --- the .fch, if given: same basis, different AO order -----------------
+    # A molecule rebuilt from the .fch produces integrals in PySCF's AO order,
+    # while everything in the .mat is in Gaussian's. They differ for every d,
+    # f, g... shell, so any quantity crossing between the two goes through the
+    # permutation in aoorder.py -- and before trusting it, the .mat core
+    # Hamiltonian is compared against PySCF's, reordered. That comparison is
+    # what proves the .fch belongs to this .mat and the mapping is right.
+    mol = perm = None
+    if fch is not None:
+        from .aoorder import check_same_basis, gaussian_to_pyscf_permutation
+        from .hamiltonian import load_mol_from_fch
+
+        mol = load_mol_from_fch(fch)
+        require(
+            int(mol.nao) == nbasis,
+            f"{fch} describes {mol.nao} basis functions but {matfile} has "
+            f"{nbasis}; they are not from the same Gaussian job.",
+        )
+        perm = gaussian_to_pyscf_permutation(mol)
+        from pyscf.scf import hf as _hf
+
+        h_mismatch = check_same_basis(
+            LABEL_CORE_HAMILTONIAN, h_ao, _hf.get_hcore(mol), perm
+        )
+
     # --- overlap ----------------------------------------------------------
     s_ao = overlap
     if s_ao is None:
@@ -292,11 +317,14 @@ def extract(
             s_ao = _unpack_square(
                 matlist[overlap_label].expand(), nbasis, overlap_label
             )
-        elif fch is not None:
-            from .hamiltonian import load_mol_from_fch
+            if mol is not None:
+                check_same_basis(
+                    overlap_label, s_ao, mol.intor_symmetric("int1e_ovlp"), perm
+                )
+        elif mol is not None:
+            from .aoorder import matrix_to_gaussian
 
-            mol = load_mol_from_fch(fch)
-            s_ao = mol.intor_symmetric("int1e_ovlp")
+            s_ao = matrix_to_gaussian(mol.intor_symmetric("int1e_ovlp"), perm)
         else:
             raise ValidationError(
                 f"no AO overlap matrix in {matfile} (looked for "
@@ -401,10 +429,21 @@ def extract(
                 f"F^s = Hcore + J[P_a + P_b] - K[P_s] from the orbitals with "
                 f"one PySCF Fock build."
             )
-        from .hamiltonian import load_mol_from_fch, rebuild_fock_with_pyscf
+        from .aoorder import coefficients_to_pyscf, matrix_to_gaussian, matrix_to_pyscf
+        from .hamiltonian import rebuild_fock_with_pyscf
 
-        mol = load_mol_from_fch(fch)
-        f_a_ao, f_b_ao = rebuild_fock_with_pyscf(mol, c_a, c_b, nalpha, nbeta)
+        # Build in PySCF's AO order, with the .mat's own core Hamiltonian, then
+        # bring the result back to Gaussian order alongside everything else.
+        f_a_pyscf, f_b_pyscf = rebuild_fock_with_pyscf(
+            mol,
+            coefficients_to_pyscf(c_a, perm),
+            coefficients_to_pyscf(c_b, perm),
+            nalpha,
+            nbeta,
+            h_ao=matrix_to_pyscf(h_ao, perm),
+        )
+        f_a_ao = matrix_to_gaussian(f_a_pyscf, perm)
+        f_b_ao = matrix_to_gaussian(f_b_pyscf, perm)
         fock_source = "rebuilt-pyscf"
 
     if ref_type in KS_REFERENCES and fock_source == "gaussian":
@@ -472,11 +511,19 @@ def extract(
             "charge could not be determined and is recorded as 0. This field "
             "is metadata only; nothing in the algebra uses it."
         )
+    if mol is not None:
+        provenance["fch_core_hamiltonian_relative_mismatch"] = h_mismatch
     if fock_source == "rebuilt-pyscf":
         provenance["fock_rebuilt"] = (
             "F^s = Hcore + J[P_a + P_b] - K[P_s], rebuilt with PySCF from the "
-            "Gaussian orbitals."
+            "Gaussian orbitals, with Hcore taken from the .mat."
         )
+        # J and K come from a basis read out of the .fch, whose exponents and
+        # contraction coefficients carry 9 significant figures. Measured effect
+        # on E_ref: ~1e-9 Ha for first-row molecules, ~1-2e-7 Ha for Ni
+        # complexes in def2-SVP. Negligible for SHCI/DMRG, but above the 1e-8
+        # default of the E_ref gate -- hence this flag, which the gate reads.
+        provenance["fock_rebuilt_from_fch"] = True
 
     return Bundle(
         ref_type=ref_type,

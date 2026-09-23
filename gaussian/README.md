@@ -35,6 +35,11 @@ record the numbers you pass here.
   Gaussian orbital order equal to the order in the `.mat`.
 - `Int=NoBasisTransform` — keeps Gaussian from re-expressing the basis, so the
   AO quantities in the `.mat` and the `.fch` refer to the same AO set.
+- `5D 7F` — spherical d and f functions. g16dump maps Gaussian's AO order onto
+  PySCF's whenever it uses the `.fch` (overlap fallback, `--rebuild-fock`), and
+  refuses Cartesian 6D/10F functions because their normalization also differs.
+  Pople bases such as 6-31G* default to Cartesian in Gaussian, so this matters;
+  def2 and cc-pVXZ are spherical already.
 - `SCF=(Conver=10)` — tight convergence. The `E_ref` gate in M2 is at 1e-8 Ha,
   and a loosely converged SCF will fail it for reasons that are not our bug.
 

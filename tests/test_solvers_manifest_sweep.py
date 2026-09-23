@@ -272,6 +272,7 @@ def test_gaussian_input_generation(tmp_path):
     assert "%chk=ch2_triplet.chk" in text
     assert "ROHF/6-31G" in text
     assert "NoSymm" in text and "Int=NoBasisTransform" in text
+    assert "5D 7F" in text
     assert "Output=MatrixElement" in text and "Tran=Full" in text
     assert "Window=(2,9)" in text
     assert "0 3" in text
