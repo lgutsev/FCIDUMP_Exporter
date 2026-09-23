@@ -26,7 +26,7 @@ def _run(capsys, *argv):
 def test_validate_accepts_a_good_bundle(capsys, fixture_path):
     code, output = _run(capsys, "validate", str(fixture_path("ch2_rohf")))
     assert code == 0
-    assert "valid against schema v1" in output
+    assert "valid against schema v2" in output
     assert "active window MOs 2-13" in output
     assert "Fock source   pyscf_rebuilt" in output
 
@@ -78,12 +78,101 @@ def test_validate_warns_about_kohn_sham_orbitals(capsys, tmp_path, synthetic):
     from dataclasses import replace
 
     path = save(
-        replace(synthetic, reference="RKS", fock_source="pyscf_rebuilt"),
+        replace(synthetic, reference_type="RKS", fock_source="pyscf_rebuilt"),
         tmp_path / "ks.npz",
     )
     code, output = _run(capsys, "validate", str(path))
     assert code == 0
     assert "exchange-correlation" in output
+
+
+# ------------------------------------------------------------------ inspect
+
+def test_inspect_reports_a_readable_mat(capsys, monkeypatch, fixture_path, tmp_path):
+    """The M0 gate in miniature: can extract read this file?"""
+    import json as _json
+
+    from g16dump import matfile
+    from test_matfile import FakeMatEl
+
+    from g16dump.bundle import load as _load
+
+    matel = FakeMatEl(_load(fixture_path("h2o_rhf")))
+    monkeypatch.setattr(matfile, "read_matel", lambda path: matel)
+
+    out = tmp_path / "report.json"
+    code, output = _run(capsys, "inspect", "job.mat", "--json", str(out))
+    assert code == 0
+    assert "AA MO 2E INTEGRALS" in output
+    assert "cannot run" not in output
+    assert "7 AO, 7 MO, 10 electrons" in output
+    assert _json.loads(out.read_text())["eri_nact"] == 6
+
+
+def test_inspect_exits_nonzero_when_extract_could_not_run(
+    capsys, monkeypatch, fixture_path
+):
+    from g16dump import matfile
+    from test_matfile import FakeMatEl
+
+    from g16dump.bundle import load as _load
+
+    matel = FakeMatEl(_load(fixture_path("h2o_rhf")), drop=["OVERLAP"])
+    monkeypatch.setattr(matfile, "read_matel", lambda path: matel)
+
+    code, output = _run(capsys, "inspect", "job.mat")
+    assert code == 1
+    assert "!! overlap" in output
+    assert "cannot run" in output
+
+
+def test_inspect_reports_a_reader_failure_as_a_sentence(capsys, monkeypatch):
+    from g16dump import matfile
+
+    def _fail(path):
+        raise matfile.MatFileError("gauopen is not importable")
+
+    monkeypatch.setattr(matfile, "read_matel", _fail)
+    code, output = _run(capsys, "inspect", "job.mat")
+    assert code == 1
+    assert "gauopen is not importable" in output
+
+
+# ------------------------------------------------------- dump and rotate
+
+def test_dump_writes_a_fcidump_where_it_was_told_to(capsys, fixture_path, tmp_path):
+    target = tmp_path / "somewhere" / "FCIDUMP"
+    code, output = _run(
+        capsys, "dump", str(fixture_path("ch2_rohf")), "--out", str(target),
+    )
+    assert code == 0
+    assert str(target) in output
+    assert target.read_text().lstrip().startswith("&FCI")
+
+
+def test_dump_refuses_a_hamiltonian_it_cannot_write(capsys, fixture_path, tmp_path):
+    """A WriteError reaches the user as a sentence, not as a traceback."""
+    from dataclasses import replace
+
+    import g16dump.cli as cli
+    from g16dump.hamiltonian import active_hamiltonian
+
+    bundle = load(fixture_path("ch2_rohf"))
+    broken = replace(active_hamiltonian(bundle), ms2=3)
+
+    original = cli.active_hamiltonian
+    cli.active_hamiltonian = lambda _bundle: broken
+    try:
+        code, output = _run(
+            capsys, "dump", str(fixture_path("ch2_rohf")),
+            "--out", str(tmp_path / "FCIDUMP"),
+        )
+    finally:
+        cli.active_hamiltonian = original
+
+    assert code == 1
+    assert "the parity is wrong" in output
+    assert "Traceback" not in output
 
 
 # ------------------------------------------------------------------ dump
@@ -247,7 +336,7 @@ def test_extract_writes_where_it_is_told(capsys, monkeypatch, tmp_path, fixture_
     assert code == 0
     assert out.exists()
     assert f"wrote {out}" in output
-    assert load(out).reference == "RHF"
+    assert load(out).reference_type == "RHF"
 
 
 def test_extract_reports_a_reader_failure_as_a_sentence(
@@ -256,7 +345,7 @@ def test_extract_reports_a_reader_failure_as_a_sentence(
     from g16dump import matfile
 
     def _fail(*args, **kwargs):
-        raise matfile.MatFileError("no matrix-element block for 'eri_act'")
+        raise matfile.MatFileError("no matrix-element block for 'eri_active'")
 
     monkeypatch.setattr(matfile, "extract", _fail)
     code, output = _run(
@@ -275,6 +364,20 @@ def test_no_subcommand_prints_help(capsys):
     assert "extract" in output and "dump" in output
 
 
+def test_an_unexpected_failure_is_not_a_bare_traceback(capsys, monkeypatch):
+    """A numpy error must still reach the user as a sentence."""
+    from g16dump import cli
+
+    def _explode(args):
+        raise np.linalg.LinAlgError("SVD did not converge")
+
+    monkeypatch.setattr(cli, "_run_validate", _explode)
+    code, output = _run(capsys, "validate", "anything.npz")
+    assert code == 3
+    assert "failed unexpectedly with LinAlgError" in output
+    assert "bug in g16dump" in output
+
+
 def test_version_is_reported(capsys):
     with pytest.raises(SystemExit) as excinfo:
         main(["--version"])
@@ -283,7 +386,7 @@ def test_version_is_reported(capsys):
 
 
 def test_every_subcommand_has_help(capsys):
-    for command in ("extract", "dump", "validate", "rotate"):
+    for command in ("inspect", "extract", "dump", "validate", "rotate"):
         with pytest.raises(SystemExit):
             main([command, "--help"])
         assert capsys.readouterr().out.strip()

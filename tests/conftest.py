@@ -85,13 +85,12 @@ def synthetic() -> Bundle:
     """
     rng = np.random.default_rng(1234)
     nao = nmo = 6
-    act_start, act_stop = 1, 5
-    nact = act_stop - act_start
+    nact = 4
     overlap = _positive_definite_overlap(nao, rng)
     mo_coeff = _orthonormal_against(overlap, nao, nmo, rng)
     fock = _symmetric(nao, rng)
     return Bundle(
-        reference="RHF",
+        reference_type="RHF",
         charge=0,
         multiplicity=1,
         nelec=6,
@@ -99,21 +98,23 @@ def synthetic() -> Bundle:
         nbeta=3,
         nao=nao,
         nmo=nmo,
-        ncore=act_start,
+        ncore=1,
         nact=nact,
-        act_start=act_start,
-        act_stop=act_stop,
-        e_nuc=9.5,
-        mo_coeff=mo_coeff,
-        overlap=overlap,
-        hcore_ao=_symmetric(nao, rng),
-        eri_act=_eightfold_symmetric_eri(nact, rng),
+        active_first=2,   # 1-based and inclusive: MOs 2-5 of 6
+        active_last=5,
+        enuc=9.5,
+        C=mo_coeff,
+        S=overlap,
+        Hcore_ao=_symmetric(nao, rng),
+        eri_active=_eightfold_symmetric_eri(nact, rng),
+        source_program="synthetic",
+        source_file="tests/conftest.py",
         fock_source="gaussian",
-        fock_ao_alpha=fock,
-        fock_ao_beta=fock.copy(),
-        mo_energy_alpha=rng.normal(size=nmo),
+        F_alpha_ao=fock,
+        F_beta_ao=fock.copy(),
+        orbital_energies=rng.normal(size=nmo),
         atom_charges=np.array([4.0, 1.0, 1.0]),
-        e_scf=-42.0,
+        escf=-42.0,
         provenance=make_provenance(fock_source="gaussian"),
     )
 

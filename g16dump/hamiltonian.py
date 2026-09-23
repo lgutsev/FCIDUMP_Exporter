@@ -74,12 +74,12 @@ class ActiveHamiltonian:
     """
 
     h_eff: np.ndarray
-    eri_act: np.ndarray
+    eri_active: np.ndarray
     e_core: float
     e_ref: float
     e_act: float
     nact: int
-    nelec_act: int
+    nelec_active: int
     ms2: int
     spin_deviation: float
     fock_source: str
@@ -104,14 +104,14 @@ def mo_fock_matrices(bundle: Bundle) -> tuple[np.ndarray, np.ndarray]:
     the two are equal. An open-shell one may not: a missing beta matrix there is
     missing information, not a shortcut, and is refused.
     """
-    if bundle.fock_ao_alpha is None:
+    if bundle.F_alpha_ao is None:
         raise HamiltonianError(
-            f"{bundle.reference} bundle carries no Fock matrix (fock_source="
+            f"{bundle.reference_type} bundle carries no Fock matrix (fock_source="
             f"{bundle.fock_source!r}). Rebuild one from the orbitals with "
             f"g16dump.hamiltonian.rebuild_fock."
         )
 
-    fock_beta_ao = bundle.fock_ao_beta
+    fock_beta_ao = bundle.F_beta_ao
     if fock_beta_ao is None:
         if bundle.nalpha != bundle.nbeta:
             raise HamiltonianError(
@@ -120,11 +120,11 @@ def mo_fock_matrices(bundle: Bundle) -> tuple[np.ndarray, np.ndarray]:
                 f"F^beta differ whenever the spin densities differ; the beta "
                 f"matrix cannot be substituted by the alpha one here."
             )
-        fock_beta_ao = bundle.fock_ao_alpha
+        fock_beta_ao = bundle.F_alpha_ao
 
     return (
-        to_mo(bundle.fock_ao_alpha, bundle.mo_coeff),
-        to_mo(fock_beta_ao, bundle.mo_coeff),
+        to_mo(bundle.F_alpha_ao, bundle.C),
+        to_mo(fock_beta_ao, bundle.C),
     )
 
 
@@ -132,24 +132,24 @@ def mo_fock_matrices(bundle: Bundle) -> tuple[np.ndarray, np.ndarray]:
 
 
 def _coulomb_exchange_over_occupied(
-    eri_act: np.ndarray, nocc: int
+    eri_active: np.ndarray, nocc: int
 ) -> tuple[np.ndarray, np.ndarray]:
     """``sum_{k<nocc} (tu|kk)`` and ``sum_{k<nocc} (tk|ku)`` over the window."""
     if nocc == 0:
-        zero = np.zeros(eri_act.shape[:2])
+        zero = np.zeros(eri_active.shape[:2])
         return zero, zero.copy()
-    coulomb = np.einsum("tukk->tu", eri_act[:, :, :nocc, :nocc], optimize=True)
-    exchange = np.einsum("tkku->tu", eri_act[:, :nocc, :nocc, :], optimize=True)
+    coulomb = np.einsum("tukk->tu", eri_active[:, :, :nocc, :nocc], optimize=True)
+    exchange = np.einsum("tkku->tu", eri_active[:, :nocc, :nocc, :], optimize=True)
     return coulomb, exchange
 
 
 def effective_one_electron(
     fock_mo_alpha: np.ndarray,
     fock_mo_beta: np.ndarray,
-    eri_act: np.ndarray,
+    eri_active: np.ndarray,
     active: slice,
-    nocc_act_alpha: int,
-    nocc_act_beta: int,
+    nocc_active_alpha: int,
+    nocc_active_beta: int,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Both spin-derived effective one-electron Hamiltonians, unreconciled.
 
@@ -160,8 +160,8 @@ def effective_one_electron(
     f_a = np.asarray(fock_mo_alpha)[active, active]
     f_b = np.asarray(fock_mo_beta)[active, active]
 
-    j_a, k_a = _coulomb_exchange_over_occupied(eri_act, nocc_act_alpha)
-    j_b, k_b = _coulomb_exchange_over_occupied(eri_act, nocc_act_beta)
+    j_a, k_a = _coulomb_exchange_over_occupied(eri_active, nocc_active_alpha)
+    j_b, k_b = _coulomb_exchange_over_occupied(eri_active, nocc_active_beta)
 
     h_from_alpha = f_a - (j_a - k_a) - j_b
     h_from_beta = f_b - (j_b - k_b) - j_a
@@ -172,13 +172,13 @@ def reference_energy(
     hcore_mo: np.ndarray,
     fock_mo_alpha: np.ndarray,
     fock_mo_beta: np.ndarray,
-    e_nuc: float,
+    enuc: float,
     nalpha: int,
     nbeta: int,
 ) -> float:
     """``E_nuc + 1/2 sum_sigma sum_{i occupied} (h_ii + f^sigma_ii)``."""
     diag = np.diag(hcore_mo)
-    energy = e_nuc
+    energy = enuc
     energy += 0.5 * float(
         np.sum(diag[:nalpha] + np.diag(fock_mo_alpha)[:nalpha])
     )
@@ -187,7 +187,7 @@ def reference_energy(
 
 
 def active_energy(
-    h_eff: np.ndarray, eri_act: np.ndarray, nocc_alpha: int, nocc_beta: int
+    h_eff: np.ndarray, eri_active: np.ndarray, nocc_alpha: int, nocc_beta: int
 ) -> float:
     """Energy of the reference determinant within the active space alone.
 
@@ -199,7 +199,7 @@ def active_energy(
 
     for nocc in (nocc_alpha, nocc_beta):
         if nocc:
-            block = eri_act[:nocc, :nocc, :nocc, :nocc]
+            block = eri_active[:nocc, :nocc, :nocc, :nocc]
             coulomb = np.einsum("ttuu->", block, optimize=True)
             exchange = np.einsum("tuut->", block, optimize=True)
             energy += 0.5 * float(coulomb - exchange)
@@ -207,7 +207,8 @@ def active_energy(
     if nocc_alpha and nocc_beta:
         energy += float(
             np.einsum(
-                "ttuu->", eri_act[:nocc_alpha, :nocc_alpha, :nocc_beta, :nocc_beta],
+                "ttuu->",
+                eri_active[:nocc_alpha, :nocc_alpha, :nocc_beta, :nocc_beta],
                 optimize=True,
             )
         )
@@ -241,7 +242,7 @@ def active_hamiltonian(
 
     if bundle.is_ks and bundle.fock_source != "pyscf_rebuilt":
         raise HamiltonianError(
-            f"{bundle.reference} orbitals with fock_source="
+            f"{bundle.reference_type} orbitals with fock_source="
             f"{bundle.fock_source!r}. The Kohn-Sham matrix contains "
             f"exchange-correlation and is not the HF Fock operator; the "
             f"active-space Hamiltonian is always the HF Hamiltonian evaluated "
@@ -249,15 +250,15 @@ def active_hamiltonian(
         )
 
     fock_a, fock_b = mo_fock_matrices(bundle)
-    hcore_mo = to_mo(bundle.hcore_ao, bundle.mo_coeff)
+    hcore_mo = to_mo(bundle.Hcore_ao, bundle.C)
 
     h_from_alpha, h_from_beta = effective_one_electron(
         fock_a,
         fock_b,
-        bundle.eri_act,
+        bundle.eri_active,
         bundle.active,
-        bundle.nocc_act_alpha,
-        bundle.nocc_act_beta,
+        bundle.nocc_active_alpha,
+        bundle.nocc_active_beta,
     )
     deviation = float(np.max(np.abs(h_from_alpha - h_from_beta)))
     if deviation > spin_tol:
@@ -269,21 +270,21 @@ def active_hamiltonian(
     h_eff = h_from_alpha
 
     e_ref = reference_energy(
-        hcore_mo, fock_a, fock_b, bundle.e_nuc, bundle.nalpha, bundle.nbeta
+        hcore_mo, fock_a, fock_b, bundle.enuc, bundle.nalpha, bundle.nbeta
     )
     e_act = active_energy(
-        h_eff, bundle.eri_act, bundle.nocc_act_alpha, bundle.nocc_act_beta
+        h_eff, bundle.eri_active, bundle.nocc_active_alpha, bundle.nocc_active_beta
     )
 
     return ActiveHamiltonian(
         h_eff=h_eff,
-        eri_act=np.asarray(bundle.eri_act),
+        eri_active=np.asarray(bundle.eri_active),
         e_core=e_ref - e_act,
         e_ref=e_ref,
         e_act=e_act,
         nact=bundle.nact,
-        nelec_act=bundle.nocc_act_alpha + bundle.nocc_act_beta,
-        ms2=bundle.nalpha - bundle.nbeta,
+        nelec_active=bundle.nelec_active,
+        ms2=bundle.ms2,
         spin_deviation=deviation,
         fock_source=bundle.fock_source,
     )
@@ -345,15 +346,15 @@ def with_rebuilt_fock(bundle: Bundle, mol) -> Bundle:
     from dataclasses import replace
 
     fock_a, fock_b = rebuild_fock(
-        mol, bundle.mo_coeff, bundle.nalpha, bundle.nbeta, bundle.hcore_ao
+        mol, bundle.C, bundle.nalpha, bundle.nbeta, bundle.Hcore_ao
     )
     provenance = dict(bundle.provenance)
     provenance["fock_source"] = "pyscf_rebuilt"
     provenance["fock_rebuilt_by"] = "pyscf"
     return replace(
         bundle,
-        fock_ao_alpha=fock_a,
-        fock_ao_beta=fock_b,
+        F_alpha_ao=fock_a,
+        F_beta_ao=fock_b,
         fock_source="pyscf_rebuilt",
         provenance=provenance,
     )

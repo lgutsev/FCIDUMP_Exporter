@@ -1,12 +1,20 @@
-"""``g16dump`` command line: extract, dump, validate, rotate.
+"""``g16dump`` command line: inspect, extract, validate, dump, rotate.
 
 No path in this module is hardcoded; everything comes from arguments. Each
 subcommand prints what it did and what the result contains, because the usual
 failure of a pipeline like this one is not a crash but a plausible number
 produced from the wrong input.
 
-``dump`` and ``rotate`` are wired to their modules but those are M3/M4 seams, so
-they report that plainly rather than pretending.
+Errors say what is scientifically wrong -- that the alpha- and beta-derived
+effective Hamiltonians disagree, that the MO coefficients are not orthonormal in
+the supplied AO overlap, that a multiplicity is incompatible with the electron
+count -- rather than surfacing a raw numpy exception. Anything unanticipated is
+caught in :func:`main` and reported with its type, so a genuine bug is still
+visible but never arrives as a bare traceback.
+
+``dump`` writes the FCIDUMP and, when the bundle carries provenance, the sidecar
+record beside it. ``rotate`` re-expresses a bundle's active space in a rotated
+orbital basis; see :mod:`g16dump.rotate` on what a rotation can cost a bundle.
 """
 
 from __future__ import annotations
@@ -26,6 +34,82 @@ KS_WARNING = (
     "rebuilt through PySCF."
 )
 
+REFERENCE_HELP = (
+    "the reference type. Required and never inferred: a .mat does not "
+    "distinguish these unambiguously, and the wrong choice produces a "
+    "plausible, wrong Hamiltonian."
+)
+
+
+# ------------------------------------------------------------------ inspect
+
+
+def _add_inspect(subparsers) -> None:
+    parser = subparsers.add_parser(
+        "inspect",
+        help="report whether extract can read a .mat, and if not, why",
+        description=(
+            "Check a Gaussian matrix-element file for the blocks g16dump needs, "
+            "report which labels they were found under, and cross-check their "
+            "dimensions against the header. For an exhaustive dump of "
+            "everything a .mat contains, assuming nothing about labels at all, "
+            "use scripts/inspect_mat.py instead."
+        ),
+    )
+    parser.add_argument("matfile", help="the Gaussian .mat file")
+    parser.add_argument("--json", dest="json_out", help="also write a JSON report here")
+    parser.set_defaults(func=_run_inspect)
+
+
+def _run_inspect(args) -> int:
+    from .matfile import MatFileError, survey
+
+    try:
+        report = survey(args.matfile)
+    except MatFileError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    header = report["header"]
+    print(f"{report['file']}")
+    print(
+        f"  {header['nao']} AO, {header['nmo']} MO, {header['nelec']} electrons, "
+        f"multiplicity {header['multiplicity']}"
+    )
+    print(
+        f"  frozen {header['nfc']} core and {header['nfv']} virtual, so the "
+        f"window is MOs {header['window_1based'][0]}-{header['window_1based'][1]}"
+    )
+    if "eri_nact" in report:
+        print(f"  two-electron block spans {report['eri_nact']} orbitals")
+
+    print("\n  blocks:")
+    for quantity, entry in report["blocks"].items():
+        mark = "  " if entry["label"] else ("!!" if entry["required"] else "--")
+        found = entry["label"] or "(absent)"
+        elements = f"  {entry['elements']} elements" if entry.get("elements") else ""
+        print(f"    {mark} {quantity:18s} {found}{elements}")
+
+    print("\n  scalars:")
+    for name, value in report["scalars"].items():
+        shown = "(absent)" if value is None else f"{value:.10f}"
+        print(f"       {name:18s} {shown}")
+
+    print()
+    for note in report["notes"]:
+        print(f"  note: {note}")
+
+    if args.json_out:
+        with open(args.json_out, "w") as handle:
+            json.dump(report, handle, indent=2, default=str)
+        print(f"\nJSON report written to {args.json_out}")
+
+    blocked = any("cannot run" in note for note in report["notes"])
+    return 1 if blocked else 0
+
+
+# ------------------------------------------------------------------ extract
+
 
 def _add_extract(subparsers) -> None:
     parser = subparsers.add_parser(
@@ -40,11 +124,7 @@ def _add_extract(subparsers) -> None:
         "--reference",
         required=True,
         choices=["RHF", "ROHF", "RKS", "ROKS"],
-        help=(
-            "the reference type. Required and never inferred: a .mat does not "
-            "distinguish these unambiguously, and the wrong choice produces a "
-            "plausible, wrong Hamiltonian."
-        ),
+        help=REFERENCE_HELP,
     )
     parser.add_argument(
         "--window",
@@ -52,9 +132,10 @@ def _add_extract(subparsers) -> None:
         type=int,
         metavar=("NFIRST", "NLAST"),
         help=(
-            "the 1-based active window from the Gaussian route. Omit to take "
-            "the partition the file reports; either way it is cross-checked "
-            "against the dimension of the two-electron block."
+            "the 1-based, inclusive active window from the Gaussian route, "
+            "stored in the bundle unchanged. Omit to take the partition the "
+            "file reports; either way it is cross-checked against the dimension "
+            "of the two-electron block."
         ),
     )
     parser.add_argument("--route", help="the Gaussian route line, for provenance")
@@ -85,27 +166,33 @@ def _run_extract(args) -> int:
     print(bundle.describe())
     if bundle.is_ks:
         print(f"\nnote: {KS_WARNING}")
-    elif bundle.fock_source == "none":
+    elif not bundle.has_fock:
         print(
-            "\nnote: no Fock matrix was found in the .mat, so the rebuilt-Fock "
-            "path is required before this bundle can produce a Hamiltonian."
+            "\nnote: Gaussian Fock matrix unavailable, so the rebuilt-Fock path "
+            "is required before this bundle can produce a Hamiltonian."
         )
     return 0
+
+
+# ----------------------------------------------------------------- validate
 
 
 def _add_validate(subparsers) -> None:
     parser = subparsers.add_parser(
         "validate",
         help="check an .npz bundle against the schema and report what it holds",
+        description=(
+            "Load a bundle, assert every invariant the schema promises, and "
+            "print what it contains. With --hamiltonian, also fold the frozen "
+            "core, which exercises the alpha/beta consistency check and "
+            "compares E_ref against the SCF energy the job recorded."
+        ),
     )
     parser.add_argument("bundle", help="the .npz bundle")
     parser.add_argument(
         "--hamiltonian",
         action="store_true",
-        help=(
-            "also build the active-space Hamiltonian, which exercises the "
-            "alpha/beta consistency check"
-        ),
+        help="also build the active-space Hamiltonian and check it",
     )
     parser.add_argument(
         "--provenance", action="store_true", help="print the provenance record"
@@ -139,19 +226,26 @@ def _run_validate(args) -> int:
 
     print(
         f"\nactive-space Hamiltonian ({hamiltonian.fock_source} Fock):\n"
+        f"  NORB / NELEC / MS2       {hamiltonian.nact} / "
+        f"{hamiltonian.nelec_active} / {hamiltonian.ms2}\n"
         f"  h' alpha/beta agreement  {hamiltonian.spin_deviation:.3e}\n"
         f"  E_core                   {hamiltonian.e_core:.10f} Ha\n"
         f"  E_act                    {hamiltonian.e_act:.10f} Ha\n"
         f"  E_ref                    {hamiltonian.e_ref:.10f} Ha"
     )
-    if bundle.e_scf is not None:
-        difference = abs(hamiltonian.e_ref - bundle.e_scf)
+    if bundle.escf is not None:
+        difference = abs(hamiltonian.e_ref - bundle.escf)
         verdict = "agrees" if difference < 1e-6 else "DISAGREES"
         print(
-            f"  E_scf from Gaussian      {bundle.e_scf:.10f} Ha  "
+            f"  escf from the job        {bundle.escf:.10f} Ha  "
             f"({verdict}, {difference:.3e})"
         )
+        if verdict == "DISAGREES":
+            return 1
     return 0
+
+
+# --------------------------------------------------------------------- dump
 
 
 def _add_dump(subparsers) -> None:
@@ -159,13 +253,28 @@ def _add_dump(subparsers) -> None:
         "dump",
         help="write an FCIDUMP from an .npz bundle",
         description=(
-            "Write the active-space Hamiltonian of a bundle as a FCIDUMP. The "
-            "alpha/beta consistency gate runs first, so a bundle carrying a "
-            "Roothaan operator is refused before anything is written."
+            "Fold the frozen core and write the active-space Hamiltonian as a\n"
+            "standard FCIDUMP. The Hamiltonian gates run first, so a bundle that\n"
+            "cannot produce a sound Hamiltonian never reaches the writer.\n"
+            "\n"
+            "Two files are written. The FCIDUMP itself carries no provenance,\n"
+            "because the format has no comment syntax its readers agree on -- a\n"
+            "comment above the namelist makes the file unreadable rather than\n"
+            "annotated. The provenance record is written beside it as\n"
+            "<out>.provenance.json instead, so the Hamiltonian can still be\n"
+            "traced back to the Gaussian job that produced it."
         ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("bundle", help="the .npz bundle")
-    parser.add_argument("--out", required=True, help="path for the FCIDUMP")
+    parser.add_argument(
+        "--out",
+        required=True,
+        help=(
+            "path for the FCIDUMP. The provenance record is written alongside "
+            "it as <out>.provenance.json."
+        ),
+    )
     parser.add_argument(
         "--threshold",
         type=float,
@@ -245,7 +354,7 @@ def _run_dump(args) -> int:
         print(f"wrote {sidecar}")
     print(
         f"  NORB   {hamiltonian.nact}\n"
-        f"  NELEC  {hamiltonian.nelec_act}\n"
+        f"  NELEC  {hamiltonian.nelec_active}\n"
         f"  MS2    {hamiltonian.ms2}\n"
         f"  E_core {hamiltonian.e_core:.10f} Ha\n"
         f"  E_ref  {hamiltonian.e_ref:.10f} Ha"
@@ -258,6 +367,9 @@ def _run_dump(args) -> int:
     if args.dice_nocc:
         print(f"\nDice nocc block:\n{dice_occupation_line(hamiltonian)}", end="")
     return 0
+
+
+# ------------------------------------------------------------------- rotate
 
 
 def _add_rotate(subparsers) -> None:
@@ -336,6 +448,9 @@ def _run_rotate(args) -> int:
     return 0
 
 
+# ------------------------------------------------------------------- parser
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="g16dump",
@@ -343,12 +458,19 @@ def build_parser() -> argparse.ArgumentParser:
             "FCIDUMP files for SHCI and DMRG from Gaussian 16 windowed MO "
             "integrals, with correct open-shell frozen-core algebra."
         ),
+        epilog=(
+            "The usual order is: inspect a .mat, extract it to an .npz bundle, "
+            "validate the bundle, then dump an FCIDUMP. Kohn-Sham orbitals "
+            "always need their Fock matrices rebuilt; the stored KS matrix is "
+            "not the HF Fock operator."
+        ),
     )
     parser.add_argument("--version", action="version", version=f"g16dump {__version__}")
     subparsers = parser.add_subparsers(dest="command")
+    _add_inspect(subparsers)
     _add_extract(subparsers)
-    _add_dump(subparsers)
     _add_validate(subparsers)
+    _add_dump(subparsers)
     _add_rotate(subparsers)
     return parser
 
@@ -359,7 +481,22 @@ def main(argv=None) -> int:
     if not getattr(args, "command", None):
         parser.print_help()
         return 1
-    return args.func(args)
+    try:
+        return args.func(args)
+    except (BundleError, HamiltonianError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    except Exception as exc:  # noqa: BLE001 - a bare traceback helps nobody here
+        # Unanticipated, so it is reported as such rather than dressed up as a
+        # scientific diagnosis. The type is kept: this is a bug to be fixed.
+        print(
+            f"error: {args.command} failed unexpectedly with "
+            f"{type(exc).__name__}: {exc}\n"
+            f"This is a bug in g16dump rather than a problem with the input. "
+            f"Please report it with the command you ran.",
+            file=sys.stderr,
+        )
+        return 3
 
 
 if __name__ == "__main__":

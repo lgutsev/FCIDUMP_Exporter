@@ -55,28 +55,28 @@ class FakeMatEl:
         self.ne = bundle.nelec
         self.multip = bundle.multiplicity
         self.nfc = bundle.ncore if nfc is None else nfc
-        self.nfv = (bundle.nmo - bundle.act_stop) if nfv is None else nfv
+        self.nfv = bundle.nfrozen_virtual if nfv is None else nfv
         self.atmchg = np.asarray(bundle.atom_charges)
 
-        coefficients = bundle.mo_coeff
+        coefficients = bundle.C
         # Stored row-wise and flattened, which is what the reader must detect
         # rather than assume. The bundle convention is column-wise.
         flat = (coefficients.T if transpose_coefficients else coefficients).ravel()
 
         self.matlist = {
-            "OVERLAP": _Entry(_pack(bundle.overlap), bundle.nao),
-            "CORE HAMILTONIAN ALPHA": _Entry(_pack(bundle.hcore_ao), bundle.nao),
+            "OVERLAP": _Entry(_pack(bundle.S), bundle.nao),
+            "CORE HAMILTONIAN ALPHA": _Entry(_pack(bundle.Hcore_ao), bundle.nao),
             "ALPHA MO COEFFICIENTS": _Entry(flat),
-            "ALPHA FOCK MATRIX": _Entry(_pack(bundle.fock_ao_alpha), bundle.nao),
-            "ALPHA ORBITAL ENERGIES": _Entry(bundle.mo_energy_alpha),
-            "AA MO 2E INTEGRALS": _Entry(bundle.eri_act.ravel()),
+            "ALPHA FOCK MATRIX": _Entry(_pack(bundle.F_alpha_ao), bundle.nao),
+            "ALPHA ORBITAL ENERGIES": _Entry(bundle.orbital_energies),
+            "AA MO 2E INTEGRALS": _Entry(bundle.eri_active.ravel()),
         }
         for label in drop:
             self.matlist.pop(label, None)
         if extra:
             self.matlist.update(extra)
 
-        self._scalars = {"ENUCREP": bundle.e_nuc, "ESCF": bundle.e_scf}
+        self._scalars = {"ENUCREP": bundle.enuc, "ESCF": bundle.escf}
         if scalars is not None:
             self._scalars = scalars
 
@@ -109,17 +109,17 @@ def test_extract_reproduces_the_job(fake, h2o):
     fake()
     bundle = M.extract("job.mat", reference="RHF", window=(2, 7), basis="sto-3g")
 
-    assert bundle.reference == "RHF"
+    assert bundle.reference_type == "RHF"
     assert (bundle.nao, bundle.nmo, bundle.nact) == (h2o.nao, h2o.nmo, h2o.nact)
     assert (bundle.nalpha, bundle.nbeta) == (h2o.nalpha, h2o.nbeta)
     assert bundle.charge == 0
     assert bundle.fock_source == "gaussian"
-    np.testing.assert_allclose(bundle.mo_coeff, h2o.mo_coeff, atol=1e-12)
-    np.testing.assert_allclose(bundle.overlap, h2o.overlap, atol=1e-12)
-    np.testing.assert_allclose(bundle.hcore_ao, h2o.hcore_ao, atol=1e-12)
-    np.testing.assert_allclose(bundle.eri_act, h2o.eri_act, atol=1e-12)
-    assert bundle.e_nuc == pytest.approx(h2o.e_nuc)
-    assert bundle.e_scf == pytest.approx(h2o.e_scf)
+    np.testing.assert_allclose(bundle.C, h2o.C, atol=1e-12)
+    np.testing.assert_allclose(bundle.S, h2o.S, atol=1e-12)
+    np.testing.assert_allclose(bundle.Hcore_ao, h2o.Hcore_ao, atol=1e-12)
+    np.testing.assert_allclose(bundle.eri_active, h2o.eri_active, atol=1e-12)
+    assert bundle.enuc == pytest.approx(h2o.enuc)
+    assert bundle.escf == pytest.approx(h2o.escf)
 
 
 def test_extract_records_provenance(fake):
@@ -141,7 +141,10 @@ def test_the_window_may_be_taken_from_the_file(fake, h2o):
     """nfc/nfv is the file's own account of the partition, and is usable."""
     fake()
     bundle = M.extract("job.mat", reference="RHF")
-    assert (bundle.act_start, bundle.act_stop) == (h2o.act_start, h2o.act_stop)
+    assert (bundle.active_first, bundle.active_last) == (
+        h2o.active_first,
+        h2o.active_last,
+    )
 
 
 def test_extracted_bundles_are_valid_and_usable(fake):
@@ -151,7 +154,7 @@ def test_extracted_bundles_are_valid_and_usable(fake):
     fake()
     bundle = M.extract("job.mat", reference="RHF", window=(2, 7))
     result = active_hamiltonian(bundle)
-    assert result.e_ref == pytest.approx(bundle.e_scf, abs=1e-9)
+    assert result.e_ref == pytest.approx(bundle.escf, abs=1e-9)
 
 
 # ------------------------------------------------ the coefficient convention
@@ -161,14 +164,14 @@ def test_either_storage_orientation_is_read_correctly(fake, h2o, transposed):
     """Which one Gaussian used is decided by C.T S C = I, not by documentation."""
     fake(transpose_coefficients=transposed)
     bundle = M.extract("job.mat", reference="RHF", window=(2, 7))
-    np.testing.assert_allclose(bundle.mo_coeff, h2o.mo_coeff, atol=1e-12)
+    np.testing.assert_allclose(bundle.C, h2o.C, atol=1e-12)
 
 
 def test_orient_mo_coeff_reports_both_scores_when_neither_works(h2o):
-    scrambled = h2o.mo_coeff.copy()
+    scrambled = h2o.C.copy()
     scrambled[:, 0] *= 3.0
     with pytest.raises(M.MatFileError) as excinfo:
-        M.orient_mo_coeff(scrambled, h2o.overlap, h2o.nao, h2o.nmo)
+        M.orient_mo_coeff(scrambled, h2o.S, h2o.nao, h2o.nmo)
     message = str(excinfo.value)
     assert "as stored" in message and "transposed" in message
     assert "NoBasisTransform" in message
@@ -176,7 +179,7 @@ def test_orient_mo_coeff_reports_both_scores_when_neither_works(h2o):
 
 def test_orient_mo_coeff_rejects_a_wrong_element_count(h2o):
     with pytest.raises(M.MatFileError, match="expected 49"):
-        M.orient_mo_coeff(np.zeros(30), h2o.overlap, h2o.nao, h2o.nmo)
+        M.orient_mo_coeff(np.zeros(30), h2o.S, h2o.nao, h2o.nmo)
 
 
 # ---------------------------------------------------------------- the window
@@ -221,7 +224,7 @@ def test_a_missing_fock_matrix_is_recorded_not_fatal(fake):
     fake(drop=["ALPHA FOCK MATRIX"])
     bundle = M.extract("job.mat", reference="RHF", window=(2, 7))
     assert bundle.fock_source == "none"
-    assert bundle.fock_ao_alpha is None
+    assert bundle.F_alpha_ao is None
 
 
 def test_a_missing_nuclear_repulsion_names_the_probe(fake):
@@ -233,7 +236,7 @@ def test_a_missing_nuclear_repulsion_names_the_probe(fake):
 def test_a_missing_scf_energy_is_simply_absent(fake):
     fake(scalars={"ENUCREP": 9.1671})
     bundle = M.extract("job.mat", reference="RHF", window=(2, 7))
-    assert bundle.e_scf is None
+    assert bundle.escf is None
 
 
 # ------------------------------------------------------- reference handling
@@ -249,7 +252,7 @@ def test_a_ks_job_never_carries_a_stored_fock_matrix(fake):
     fake()
     bundle = M.extract("job.mat", reference="RKS", window=(2, 7))
     assert bundle.fock_source == "none"
-    assert bundle.fock_ao_alpha is None
+    assert bundle.F_alpha_ao is None
     assert "rebuilt" in bundle.provenance["ks_note"]
 
 
@@ -260,16 +263,16 @@ def test_a_uhf_job_is_refused_with_the_workaround(fake, h2o):
     rotation = np.eye(h2o.nmo)
     rotation[2, 2] = rotation[3, 3] = 0.0
     rotation[2, 3] = rotation[3, 2] = 1.0
-    fake(extra={"BETA MO COEFFICIENTS": _Entry((h2o.mo_coeff @ rotation).T.ravel())})
+    fake(extra={"BETA MO COEFFICIENTS": _Entry((h2o.C @ rotation).T.ravel())})
     with pytest.raises(M.MatFileError, match="UHF reference"):
         M.extract("job.mat", reference="RHF", window=(2, 7))
 
 
 def test_identical_beta_coefficients_are_not_a_uhf_job(fake, h2o):
     """A restricted job may write both blocks; only a difference is UHF."""
-    fake(extra={"BETA MO COEFFICIENTS": _Entry(h2o.mo_coeff.T.ravel())})
+    fake(extra={"BETA MO COEFFICIENTS": _Entry(h2o.C.T.ravel())})
     bundle = M.extract("job.mat", reference="RHF", window=(2, 7))
-    np.testing.assert_allclose(bundle.mo_coeff, h2o.mo_coeff, atol=1e-12)
+    np.testing.assert_allclose(bundle.C, h2o.C, atol=1e-12)
 
 
 def test_an_impossible_multiplicity_in_the_header_is_caught(fake, h2o, monkeypatch):
@@ -327,3 +330,59 @@ def test_gauopen_absence_is_a_sentence_not_a_traceback(monkeypatch):
     monkeypatch.setattr(builtins, "__import__", _no_qcmatel)
     with pytest.raises(M.MatFileError, match="PYTHONPATH"):
         M.read_matel("job.mat")
+
+
+# ---------------------------------------------------------------- the survey
+
+def test_survey_says_when_everything_is_present(fake):
+    fake()
+    report = M.survey("job.mat")
+    assert report["blocks"]["eri_active"]["label"] == "AA MO 2E INTEGRALS"
+    assert report["eri_nact"] == 6
+    assert report["header"]["window_1based"] == [2, 7]
+    assert not any("cannot run" in note for note in report["notes"])
+
+
+def test_survey_reports_a_missing_required_block_as_blocking(fake):
+    fake(drop=["AA MO 2E INTEGRALS"])
+    report = M.survey("job.mat")
+    assert report["blocks"]["eri_active"]["label"] is None
+    assert report["blocks"]["eri_active"]["required"] is True
+    assert any("cannot run" in note for note in report["notes"])
+
+
+def test_survey_treats_a_missing_fock_as_information_not_a_blocker(fake):
+    """No Fock matrix means the rebuilt-Fock path, which is normal for KS."""
+    fake(drop=["ALPHA FOCK MATRIX"])
+    report = M.survey("job.mat")
+    notes = " ".join(report["notes"])
+    assert "rebuilt-Fock path will be required" in notes
+    assert "cannot run" not in notes
+
+
+def test_survey_notices_a_missing_beta_fock(fake):
+    fake()
+    report = M.survey("job.mat")
+    assert any("no beta one" in note for note in report["notes"])
+
+
+def test_survey_cross_checks_the_window_against_the_integrals(fake):
+    fake(nfc=2)
+    report = M.survey("job.mat")
+    assert any(
+        "active ERI dimension inconsistent with the header" in note
+        for note in report["notes"]
+    )
+
+
+def test_survey_flags_beta_coefficients_as_a_possible_uhf_job(fake, h2o):
+    fake(extra={"BETA MO COEFFICIENTS": _Entry(h2o.C.T.ravel())})
+    report = M.survey("job.mat")
+    assert any("UHF reference" in note for note in report["notes"])
+
+
+def test_survey_reports_scalars_it_could_not_find(fake):
+    fake(scalars={"ENUCREP": 9.1671})
+    report = M.survey("job.mat")
+    assert report["scalars"]["enuc"] == pytest.approx(9.1671)
+    assert report["scalars"]["escf"] is None

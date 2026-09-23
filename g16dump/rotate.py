@@ -38,7 +38,7 @@ The windowed algebra reaches ``h'`` from the Fock matrices, which means
 subtracting the contribution of the active orbitals occupied in the reference
 determinant -- and it identifies those *by index order*, as the lowest
 ``n_sigma - ncore`` of the window. That convention is what
-:func:`g16dump.bundle.Bundle.nocc_act_alpha` encodes.
+:func:`g16dump.bundle.Bundle.nocc_active_alpha` encodes.
 
 A rotation that mixes an occupied active orbital with a virtual one therefore
 does not merely re-express the reference determinant, it **replaces** it: the
@@ -130,7 +130,7 @@ def reference_blocks(bundle: Bundle) -> tuple[tuple[int, int], ...]:
 
 def named_reference_blocks(bundle: Bundle) -> tuple[tuple[int, int, str], ...]:
     """:func:`reference_blocks`, with each range carrying its own name."""
-    edges = (0, bundle.nocc_act_beta, bundle.nocc_act_alpha, bundle.nact)
+    edges = (0, bundle.nocc_active_beta, bundle.nocc_active_alpha, bundle.nact)
     return tuple(
         (lo, hi, name)
         for lo, hi, name in zip(edges, edges[1:], GROUP_NAMES)
@@ -226,7 +226,7 @@ def rotate_active_space(
     if not allow_reference_change:
         check_reference_preserving(matrix, named_reference_blocks(bundle), tol)
 
-    mo_coeff = np.array(bundle.mo_coeff, copy=True)
+    mo_coeff = np.array(bundle.C, copy=True)
     mo_coeff[:, bundle.active] = mo_coeff[:, bundle.active] @ matrix
 
     provenance = dict(bundle.provenance)
@@ -239,12 +239,12 @@ def rotate_active_space(
 
     rotated = replace(
         bundle,
-        mo_coeff=mo_coeff,
-        eri_act=transform_eri(bundle.eri_act, matrix),
+        C=mo_coeff,
+        eri_active=transform_eri(bundle.eri_active, matrix),
         # The orbitals are no longer the ones these energies described, and a
         # stale diagnostic is worse than an absent one.
-        mo_energy_alpha=None,
-        mo_energy_beta=None,
+        orbital_energies=None,
+        orbital_energies_beta=None,
         provenance=provenance,
     )
     validate(rotated, source="rotated bundle")

@@ -212,8 +212,8 @@ def test_reference_energy_read_back_reproduces_the_scf_energy(
     """The whole pipeline, judged against a number PySCF produced independently."""
     bundle = load(fixture_path(name))
     _, _, parsed = written(name)
-    assert bundle.e_scf is not None
-    assert _reference_energy(parsed) == pytest.approx(bundle.e_scf, abs=1e-9)
+    assert bundle.escf is not None
+    assert _reference_energy(parsed) == pytest.approx(bundle.escf, abs=1e-9)
 
 
 @pytest.mark.parametrize("name", SOUND)
@@ -239,11 +239,11 @@ def test_the_reference_energy_alone_really_is_blind_to_the_eris(
     docstrings that explain why it exists are wrong.
     """
     bundle = load(fixture_path("h2o_rhf"))
-    doubled = active_hamiltonian(replace(bundle, eri_act=2.0 * bundle.eri_act))
+    doubled = active_hamiltonian(replace(bundle, eri_active=2.0 * bundle.eri_active))
     parsed = _read_fcidump(
         write_fcidump(doubled, tmp_path / "doubled.FCIDUMP")
     )
-    assert _reference_energy(parsed) == pytest.approx(bundle.e_scf, abs=1e-9)
+    assert _reference_energy(parsed) == pytest.approx(bundle.escf, abs=1e-9)
     assert _active_energy(parsed) != pytest.approx(
         active_hamiltonian(bundle).e_act, abs=1e-6
     )
@@ -264,7 +264,7 @@ def test_the_scalar_record_is_e_core_and_comes_last(written, name):
 def test_the_header_describes_the_active_space(written, name):
     hamiltonian, _, parsed = written(name)
     assert parsed.norb == hamiltonian.nact
-    assert parsed.nelec == hamiltonian.nelec_act
+    assert parsed.nelec == hamiltonian.nelec_active
     assert parsed.ms2 == hamiltonian.ms2
     assert parsed.orbsym == [1] * hamiltonian.nact
     assert parsed.isym == 1
@@ -371,7 +371,7 @@ def test_the_written_triangle_is_bit_exact(written, name):
         parsed.h1[lower], np.asarray(hamiltonian.h_eff)[lower]
     )
     for value, i, j, k, m in parsed.two_electron:
-        assert value == hamiltonian.eri_act[i - 1, j - 1, k - 1, m - 1]
+        assert value == hamiltonian.eri_active[i - 1, j - 1, k - 1, m - 1]
 
 
 @pytest.mark.parametrize("name", SOUND)
@@ -390,7 +390,7 @@ def test_the_scattered_tensors_match_within_the_inputs_own_asymmetry(written, na
 
     np.testing.assert_allclose(parsed.h1, h, atol=max(asymmetry, 1e-300))
     np.testing.assert_array_equal(parsed.h1, parsed.h1.T)
-    np.testing.assert_allclose(parsed.eri, hamiltonian.eri_act, atol=1e-12)
+    np.testing.assert_allclose(parsed.eri, hamiltonian.eri_active, atol=1e-12)
 
 
 def test_lower_precision_is_lossy_and_says_so_by_being_lossy(hamiltonians, tmp_path):
@@ -419,7 +419,7 @@ def test_a_threshold_drops_exactly_the_integrals_below_it(written, name):
     for value, *_ in parsed.two_electron:
         assert abs(value) >= threshold
 
-    eri = np.asarray(hamiltonian.eri_act)
+    eri = np.asarray(hamiltonian.eri_active)
     npair = hamiltonian.nact * (hamiltonian.nact + 1) // 2
     pair_t, pair_u = np.tril_indices(hamiltonian.nact)
     kept = 0
@@ -446,7 +446,7 @@ def test_an_integral_exactly_at_the_threshold_is_kept(hamiltonians, tmp_path):
     threshold to be one of the values makes the boundary observable.
     """
     hamiltonian = hamiltonians("h2o_rhf")
-    eri = np.asarray(hamiltonian.eri_act)
+    eri = np.asarray(hamiltonian.eri_active)
 
     # A symmetry-unique element, and one large enough not to be the smallest.
     threshold = abs(float(eri[2, 1, 2, 1]))
@@ -485,13 +485,13 @@ def test_a_threshold_can_move_the_reference_energy_by_a_lot(
     bundle = load(fixture_path("ch2_rohf"))
 
     exact = _read_fcidump(write_fcidump(hamiltonian, tmp_path / "exact.FCIDUMP"))
-    assert _reference_energy(exact) == pytest.approx(bundle.e_scf, abs=1e-9)
+    assert _reference_energy(exact) == pytest.approx(bundle.escf, abs=1e-9)
 
     coarse = _read_fcidump(
         write_fcidump(hamiltonian, tmp_path / "coarse.FCIDUMP", threshold=1e-1)
     )
     assert len(coarse.two_electron) < len(exact.two_electron)
-    assert abs(_reference_energy(coarse) - bundle.e_scf) > 0.1
+    assert abs(_reference_energy(coarse) - bundle.escf) > 0.1
 
 
 # -------------------------------------------------------------- provenance
@@ -551,10 +551,10 @@ def test_a_failed_write_leaves_the_previous_file_intact(hamiltonians, tmp_path):
     write_fcidump(hamiltonian, path)
     original = path.read_bytes()
 
-    broken = np.array(hamiltonian.eri_act, copy=True)
+    broken = np.array(hamiltonian.eri_active, copy=True)
     broken[3, 2, 1, 0] += 1e-3
     with pytest.raises(WriteError):
-        write_fcidump(replace(hamiltonian, eri_act=broken), path)
+        write_fcidump(replace(hamiltonian, eri_active=broken), path)
 
     assert path.read_bytes() == original
     assert not path.with_name(path.name + ".partial").exists()
@@ -563,10 +563,10 @@ def test_a_failed_write_leaves_the_previous_file_intact(hamiltonians, tmp_path):
 def test_a_failed_first_write_leaves_nothing_behind(hamiltonians, tmp_path):
     hamiltonian = hamiltonians("h2o_rhf")
     path = tmp_path / "never.FCIDUMP"
-    broken = np.array(hamiltonian.eri_act, copy=True)
+    broken = np.array(hamiltonian.eri_active, copy=True)
     broken[3, 2, 1, 0] += 1e-3
     with pytest.raises(WriteError):
-        write_fcidump(replace(hamiltonian, eri_act=broken), path)
+        write_fcidump(replace(hamiltonian, eri_active=broken), path)
     assert not path.exists()
     assert not path.with_name(path.name + ".partial").exists()
 
@@ -585,10 +585,10 @@ def test_a_nonsymmetric_h_is_refused(hamiltonians, tmp_path):
 
 def test_a_nonsymmetric_eri_is_refused(hamiltonians, tmp_path):
     hamiltonian = hamiltonians("h2o_rhf")
-    broken = np.array(hamiltonian.eri_act, copy=True)
+    broken = np.array(hamiltonian.eri_active, copy=True)
     broken[1, 0, 0, 0] += 1e-3
     with pytest.raises(WriteError, match="violates"):
-        write_fcidump(replace(hamiltonian, eri_act=broken), tmp_path / "x.FCIDUMP")
+        write_fcidump(replace(hamiltonian, eri_active=broken), tmp_path / "x.FCIDUMP")
 
 
 def test_the_eri_tolerance_matches_the_schemas(hamiltonians, tmp_path):
@@ -596,9 +596,9 @@ def test_the_eri_tolerance_matches_the_schemas(hamiltonians, tmp_path):
     from g16dump.bundle import ERI_SYMMETRY_TOL
 
     hamiltonian = hamiltonians("h2o_rhf")
-    nudged = np.array(hamiltonian.eri_act, copy=True)
+    nudged = np.array(hamiltonian.eri_active, copy=True)
     nudged[1, 0, 0, 0] += ERI_SYMMETRY_TOL / 10.0
-    write_fcidump(replace(hamiltonian, eri_act=nudged), tmp_path / "ok.FCIDUMP")
+    write_fcidump(replace(hamiltonian, eri_active=nudged), tmp_path / "ok.FCIDUMP")
 
 
 @pytest.mark.parametrize(
@@ -646,7 +646,7 @@ def test_a_spin_string_that_breaks_the_pauli_bound_is_refused(
     assert hamiltonian.nact == 6
     with pytest.raises(WriteError, match="does not fit in 6 spatial orbitals"):
         write_fcidump(
-            replace(hamiltonian, nelec_act=10, ms2=8), tmp_path / "pauli.FCIDUMP"
+            replace(hamiltonian, nelec_active=10, ms2=8), tmp_path / "pauli.FCIDUMP"
         )
 
 
@@ -666,8 +666,8 @@ def test_the_dice_occupation_line_fills_the_lowest_spin_orbitals():
 
     def fake(nelec, ms2):
         return ActiveHamiltonian(
-            h_eff=np.zeros((4, 4)), eri_act=np.zeros((4,) * 4), e_core=0.0,
-            e_ref=0.0, e_act=0.0, nact=4, nelec_act=nelec, ms2=ms2,
+            h_eff=np.zeros((4, 4)), eri_active=np.zeros((4,) * 4), e_core=0.0,
+            e_ref=0.0, e_act=0.0, nact=4, nelec_active=nelec, ms2=ms2,
             spin_deviation=0.0, fock_source="gaussian",
         )
 
@@ -713,13 +713,13 @@ def test_pyscf_reads_the_file_and_agrees(hamiltonians, fixture_path, tmp_path, n
 
     data = fcidump.read(str(path), verbose=False)
     assert data["NORB"] == hamiltonian.nact
-    assert data["NELEC"] == hamiltonian.nelec_act
+    assert data["NELEC"] == hamiltonian.nelec_active
     assert data["MS2"] == hamiltonian.ms2
 
     np.testing.assert_allclose(data["H1"], hamiltonian.h_eff, atol=1e-12)
     eri = ao2mo.restore(1, np.asarray(data["H2"]), hamiltonian.nact)
-    np.testing.assert_allclose(eri, hamiltonian.eri_act, atol=1e-12)
+    np.testing.assert_allclose(eri, hamiltonian.eri_active, atol=1e-12)
     assert data["ECORE"] == pytest.approx(hamiltonian.e_core, abs=1e-12)
 
     parsed = _read_fcidump(path)
-    assert _reference_energy(parsed) == pytest.approx(bundle.e_scf, abs=1e-9)
+    assert _reference_energy(parsed) == pytest.approx(bundle.escf, abs=1e-9)

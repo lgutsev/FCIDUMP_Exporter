@@ -69,7 +69,7 @@ def _check(
         raise WriteError(f"nact is {nact}; there is nothing to write")
 
     h = np.asarray(hamiltonian.h_eff)
-    eri = np.asarray(hamiltonian.eri_act)
+    eri = np.asarray(hamiltonian.eri_active)
     if h.shape != (nact, nact):
         problems.append(f"h_eff has shape {h.shape}, expected {(nact, nact)}")
     if eri.shape != (nact,) * 4:
@@ -91,7 +91,7 @@ def _check(
             f"lower triangle is written, so the upper one would be silently lost"
         )
 
-    nelec, ms2 = int(hamiltonian.nelec_act), int(hamiltonian.ms2)
+    nelec, ms2 = int(hamiltonian.nelec_active), int(hamiltonian.ms2)
     if nelec < 0:
         problems.append(f"nelec_act is {nelec}")
     if ms2 < 0:
@@ -278,7 +278,7 @@ def write_fcidump(
     _check(hamiltonian, orbsym, isym, threshold, precision)
 
     h = np.ascontiguousarray(hamiltonian.h_eff, dtype=np.float64)
-    eri = np.ascontiguousarray(hamiltonian.eri_act, dtype=np.float64)
+    eri = np.ascontiguousarray(hamiltonian.eri_active, dtype=np.float64)
     value_format = f"%{int(precision) + 8}.{int(precision)}E"
 
     path = Path(path)
@@ -327,7 +327,7 @@ def _write_records(
     """Stream the namelist and every record to ``path``."""
     with path.open("w", encoding="ascii", newline="\n") as handle:
         handle.write(
-            _header(nact, int(hamiltonian.nelec_act), int(hamiltonian.ms2),
+            _header(nact, int(hamiltonian.nelec_active), int(hamiltonian.ms2),
                     orbsym, isym)
         )
 
@@ -419,7 +419,7 @@ def dice_occupation_line(hamiltonian: ActiveHamiltonian) -> str:
     is five electrons in three spatial orbitals with MS2 = 1 -- the alpha string
     then the beta string, which is the order the legacy ``input.dat`` uses.
     """
-    nelec, ms2 = int(hamiltonian.nelec_act), int(hamiltonian.ms2)
+    nelec, ms2 = int(hamiltonian.nelec_active), int(hamiltonian.ms2)
     nalpha = (nelec + ms2) // 2
     nbeta = nelec - nalpha
     spin_orbitals = [2 * p for p in range(nalpha)] + [2 * p + 1 for p in range(nbeta)]

@@ -76,7 +76,7 @@ def test_every_energy_survives_a_rotation(bundles, name):
     assert rotated.e_core == pytest.approx(plain.e_core, abs=1e-9)
     assert rotated.e_ref == pytest.approx(plain.e_ref, abs=1e-9)
     assert rotated.e_act == pytest.approx(plain.e_act, abs=1e-9)
-    assert rotated.nelec_act == plain.nelec_act
+    assert rotated.nelec_active == plain.nelec_active
     assert rotated.ms2 == plain.ms2
     assert rotated.nact == plain.nact
 
@@ -86,8 +86,8 @@ def test_the_reference_energy_still_matches_the_scf_energy(bundles, name):
     """Invariance against an outside number, not merely against ourselves."""
     bundle = bundles(name)
     rotated = R.rotate_active_space(bundle, R.random_block_rotation(bundle, 7))
-    assert bundle.e_scf is not None
-    assert active_hamiltonian(rotated).e_ref == pytest.approx(bundle.e_scf, abs=1e-9)
+    assert bundle.escf is not None
+    assert active_hamiltonian(rotated).e_ref == pytest.approx(bundle.escf, abs=1e-9)
 
 
 @pytest.mark.parametrize("name", SOUND)
@@ -118,12 +118,12 @@ def test_the_two_electron_invariants_hold(bundles, name):
     """Traces of the ERI tensor that a four-index orthogonal transform preserves."""
     bundle = bundles(name)
     rotated = R.rotate_active_space(bundle, R.random_block_rotation(bundle, 3))
-    for eri in (bundle.eri_act, rotated.eri_act):
+    for eri in (bundle.eri_active, rotated.eri_active):
         assert np.isfinite(eri).all()
-    plain_j = np.einsum("ttuu->", bundle.eri_act)
-    plain_k = np.einsum("tuut->", bundle.eri_act)
-    assert np.einsum("ttuu->", rotated.eri_act) == pytest.approx(plain_j, abs=1e-9)
-    assert np.einsum("tuut->", rotated.eri_act) == pytest.approx(plain_k, abs=1e-9)
+    plain_j = np.einsum("ttuu->", bundle.eri_active)
+    plain_k = np.einsum("tuut->", bundle.eri_active)
+    assert np.einsum("ttuu->", rotated.eri_active) == pytest.approx(plain_j, abs=1e-9)
+    assert np.einsum("tuut->", rotated.eri_active) == pytest.approx(plain_k, abs=1e-9)
 
 
 def test_a_rotated_fcidump_carries_the_same_header_and_core_energy(
@@ -163,15 +163,15 @@ def test_rotations_compose(bundles, name):
     twice = R.rotate_active_space(R.rotate_active_space(bundle, first), second)
     once = R.rotate_active_space(bundle, first @ second)
 
-    np.testing.assert_allclose(twice.mo_coeff, once.mo_coeff, atol=1e-10)
-    np.testing.assert_allclose(twice.eri_act, once.eri_act, atol=1e-8)
+    np.testing.assert_allclose(twice.C, once.C, atol=1e-10)
+    np.testing.assert_allclose(twice.eri_active, once.eri_active, atol=1e-8)
 
 
 def test_the_identity_changes_nothing(bundles):
     bundle = bundles("ch2_rohf")
     rotated = R.rotate_active_space(bundle, np.eye(bundle.nact))
-    np.testing.assert_allclose(rotated.mo_coeff, bundle.mo_coeff, atol=1e-14)
-    np.testing.assert_allclose(rotated.eri_act, bundle.eri_act, atol=1e-12)
+    np.testing.assert_allclose(rotated.C, bundle.C, atol=1e-14)
+    np.testing.assert_allclose(rotated.eri_active, bundle.eri_active, atol=1e-12)
 
 
 def test_rotating_back_recovers_the_original(bundles):
@@ -180,8 +180,8 @@ def test_rotating_back_recovers_the_original(bundles):
     rotation = R.random_block_rotation(bundle, 31)
     there = R.rotate_active_space(bundle, rotation)
     back = R.rotate_active_space(there, rotation.T)
-    np.testing.assert_allclose(back.mo_coeff, bundle.mo_coeff, atol=1e-10)
-    np.testing.assert_allclose(back.eri_act, bundle.eri_act, atol=1e-8)
+    np.testing.assert_allclose(back.C, bundle.C, atol=1e-10)
+    np.testing.assert_allclose(back.eri_active, bundle.eri_active, atol=1e-8)
 
 
 def test_the_orbitals_really_moved(bundles):
@@ -190,20 +190,20 @@ def test_the_orbitals_really_moved(bundles):
     rotated = R.rotate_active_space(bundle, R.random_block_rotation(bundle, 8))
     active = bundle.active
     change = float(
-        np.max(np.abs(rotated.mo_coeff[:, active] - bundle.mo_coeff[:, active]))
+        np.max(np.abs(rotated.C[:, active] - bundle.C[:, active]))
     )
     assert change > 0.1, f"the rotation barely moved the orbitals ({change:.3e})"
-    assert float(np.max(np.abs(rotated.eri_act - bundle.eri_act))) > 1e-3
+    assert float(np.max(np.abs(rotated.eri_active - bundle.eri_active))) > 1e-3
 
 
 def test_the_frozen_core_is_untouched(bundles):
     """A rotation is inside the window; a core orbital that moved would be a bug."""
     bundle = bundles("ch2_rohf")
-    assert bundle.act_start > 0, "this fixture has no frozen core to check"
+    assert bundle.active_start > 0, "this fixture has no frozen core to check"
     rotated = R.rotate_active_space(bundle, R.random_block_rotation(bundle, 9))
     np.testing.assert_array_equal(
-        rotated.mo_coeff[:, : bundle.act_start],
-        bundle.mo_coeff[:, : bundle.act_start],
+        rotated.C[:, : bundle.active_start],
+        bundle.C[:, : bundle.active_start],
     )
 
 
@@ -216,13 +216,13 @@ def test_the_frozen_virtuals_are_untouched(bundles):
     ``h2o_frozen_virtual`` windows MOs 2-10 of 13, leaving three.
     """
     bundle = bundles("h2o_frozen_virtual")
-    frozen_count = bundle.nmo - bundle.act_stop
+    frozen_count = bundle.nmo - bundle.active_stop
     assert frozen_count == 3, "this test exists for the non-empty slice"
 
     rotated = R.rotate_active_space(bundle, R.random_block_rotation(bundle, 9))
-    frozen = rotated.mo_coeff[:, bundle.act_stop :]
+    frozen = rotated.C[:, bundle.active_stop :]
     assert frozen.size > 0
-    np.testing.assert_array_equal(frozen, bundle.mo_coeff[:, bundle.act_stop :])
+    np.testing.assert_array_equal(frozen, bundle.C[:, bundle.active_stop :])
 
 
 def test_frozen_virtuals_do_not_change_any_energy(bundles):
@@ -232,8 +232,8 @@ def test_frozen_virtuals_do_not_change_any_energy(bundles):
     rotated = active_hamiltonian(
         R.rotate_active_space(bundle, R.random_block_rotation(bundle, 41))
     )
-    assert plain.e_ref == pytest.approx(bundle.e_scf, abs=1e-9)
-    assert rotated.e_ref == pytest.approx(bundle.e_scf, abs=1e-9)
+    assert plain.e_ref == pytest.approx(bundle.escf, abs=1e-9)
+    assert rotated.e_ref == pytest.approx(bundle.escf, abs=1e-9)
     assert rotated.e_core == pytest.approx(plain.e_core, abs=1e-9)
 
 
@@ -241,18 +241,18 @@ def test_the_ao_basis_matrices_are_untouched(bundles):
     """They are stored in the AO basis so that a rotation cannot reach them."""
     bundle = bundles("ch2_rohf")
     rotated = R.rotate_active_space(bundle, R.random_block_rotation(bundle, 10))
-    np.testing.assert_array_equal(rotated.hcore_ao, bundle.hcore_ao)
-    np.testing.assert_array_equal(rotated.overlap, bundle.overlap)
-    np.testing.assert_array_equal(rotated.fock_ao_alpha, bundle.fock_ao_alpha)
+    np.testing.assert_array_equal(rotated.Hcore_ao, bundle.Hcore_ao)
+    np.testing.assert_array_equal(rotated.S, bundle.S)
+    np.testing.assert_array_equal(rotated.F_alpha_ao, bundle.F_alpha_ao)
 
 
 def test_stale_orbital_energies_are_dropped(bundles):
     """They described the old orbitals; keeping them would be a lie with a number."""
     bundle = bundles("ch2_rohf")
-    assert bundle.fock_ao_alpha is not None
+    assert bundle.F_alpha_ao is not None
     rotated = R.rotate_active_space(bundle, R.random_block_rotation(bundle, 12))
-    assert rotated.mo_energy_alpha is None
-    assert rotated.mo_energy_beta is None
+    assert rotated.orbital_energies is None
+    assert rotated.orbital_energies_beta is None
 
 
 def test_the_rotation_is_recorded_in_the_provenance(bundles):
@@ -288,8 +288,8 @@ def test_an_open_shell_has_all_three_groups(bundles):
     bundle = bundles("ch2_rohf")
     blocks = R.reference_blocks(bundle)
     assert len(blocks) == 3
-    assert blocks[0] == (0, bundle.nocc_act_beta)
-    assert blocks[1] == (bundle.nocc_act_beta, bundle.nocc_act_alpha)
+    assert blocks[0] == (0, bundle.nocc_active_beta)
+    assert blocks[1] == (bundle.nocc_active_beta, bundle.nocc_active_alpha)
 
 
 @pytest.mark.parametrize("name", SOUND)
@@ -364,8 +364,8 @@ def test_the_closed_shell_spin_gate_really_is_blind_to_this(bundles):
     )
     fock_a, fock_b = H.mo_fock_matrices(rotated)
     from_alpha, from_beta = H.effective_one_electron(
-        fock_a, fock_b, rotated.eri_act, rotated.active,
-        rotated.nocc_act_alpha, rotated.nocc_act_beta,
+        fock_a, fock_b, rotated.eri_active, rotated.active,
+        rotated.nocc_active_alpha, rotated.nocc_active_beta,
     )
     assert float(np.max(np.abs(from_alpha - from_beta))) == 0.0
 
@@ -398,7 +398,7 @@ def test_group_names_follow_the_boundaries_not_the_count(bundles):
     """
     from dataclasses import replace
 
-    bundle = bundles("ch2_rohf")  # nocc_act_beta=2, nocc_act_alpha=4, nact=12
+    bundle = bundles("ch2_rohf")  # nocc_active_beta=2, nocc_active_alpha=4, nact=12
 
     closed = replace(bundle, nalpha=3, nbeta=3, nelec=6, multiplicity=1)
     assert [n for _, _, n in R.named_reference_blocks(closed)] == [
@@ -407,14 +407,14 @@ def test_group_names_follow_the_boundaries_not_the_count(bundles):
 
     # ncore == nbeta: no doubly occupied active orbital at all.
     no_doubly = replace(bundle, nbeta=bundle.ncore)
-    assert no_doubly.nocc_act_beta == 0
+    assert no_doubly.nocc_active_beta == 0
     assert [n for _, _, n in R.named_reference_blocks(no_doubly)] == [
         "singly occupied", "virtual",
     ]
 
     # The window is entirely occupied: nothing virtual in it.
     full = replace(bundle, nalpha=bundle.ncore + bundle.nact)
-    assert full.nocc_act_alpha == bundle.nact
+    assert full.nocc_active_alpha == bundle.nact
     assert [n for _, _, n in R.named_reference_blocks(full)] == [
         "doubly occupied", "singly occupied",
     ]
@@ -484,7 +484,7 @@ def test_random_rotation_is_reproducible_and_orthogonal():
 def test_transform_eri_keeps_the_permutational_symmetry(bundles):
     """An orthogonal transform of a symmetric tensor is still symmetric."""
     bundle = bundles("ch2_rohf")
-    out = R.transform_eri(bundle.eri_act, R.random_block_rotation(bundle, 18))
+    out = R.transform_eri(bundle.eri_active, R.random_block_rotation(bundle, 18))
     np.testing.assert_allclose(out, out.transpose(1, 0, 2, 3), atol=1e-10)
     np.testing.assert_allclose(out, out.transpose(0, 1, 3, 2), atol=1e-10)
     np.testing.assert_allclose(out, out.transpose(2, 3, 0, 1), atol=1e-10)
@@ -520,14 +520,14 @@ def test_the_fci_ground_state_energy_is_unchanged(bundles, name):
         R.rotate_active_space(bundle, R.random_block_rotation(bundle, 2718))
     )
 
-    nalpha = (plain.nelec_act + plain.ms2) // 2
-    nbeta = plain.nelec_act - nalpha
+    nalpha = (plain.nelec_active + plain.ms2) // 2
+    nbeta = plain.nelec_active - nalpha
 
     energies = []
     for result in (plain, rotated):
         energy, _ = fci.direct_spin1.kernel(
             np.asarray(result.h_eff),
-            np.asarray(result.eri_act),
+            np.asarray(result.eri_active),
             result.nact,
             (nalpha, nbeta),
             ecore=result.e_core,
