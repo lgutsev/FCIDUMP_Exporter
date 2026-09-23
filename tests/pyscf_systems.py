@@ -224,3 +224,27 @@ def casci_reference(mf, ncore: int, nact: int, nelecas, mo_coeff=None):
     mo_act = np.asarray(mo)[:, ncore : ncore + nact]
     eri = ao2mo.restore(1, ao2mo.kernel(mf.mol, mo_act), nact)
     return np.asarray(h1eff), float(e_core), np.asarray(eri)
+
+
+def tight_fci(h1, eri, norb, nelec, *, nroots: int = 1, conv_tol: float = 1e-12):
+    """FCI with convergence tight enough to compare two orbital bases.
+
+    PySCF's default Davidson tolerance is fine for a single calculation but not
+    for asserting that two *different orbital bases* give the same energy. After
+    a random active-space rotation the Hartree-Fock determinant is a poor
+    starting guess, and for a strongly multireference system -- stretched N2 is
+    the case that exposed this -- the default converges to roughly 1e-4 Ha,
+    which looks like a broken rotation and is not.
+
+    The give-away is that the rotated result comes out *higher*: FCI is
+    variational, so an under-converged energy can only be above the converged
+    one.
+    """
+    from pyscf import fci
+
+    solver = fci.direct_spin1.FCI()
+    solver.conv_tol = conv_tol
+    solver.max_cycle = 500
+    solver.max_space = 30
+    solver.nroots = nroots
+    return solver.kernel(h1, eri, norb, nelec, verbose=0)[0]

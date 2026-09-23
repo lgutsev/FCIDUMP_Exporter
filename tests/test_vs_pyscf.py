@@ -43,6 +43,7 @@ from pyscf_systems import (  # noqa: E402
     roothaan_effective_fock,
     rotate_orbitals,
     run_scf,
+    tight_fci,
 )
 
 # name, basis, pyscf spin (na - nb), ref_type, ncore, nact
@@ -313,3 +314,48 @@ def test_ks_bundle_on_the_stored_fock_path_is_refused(rks_water):
     stored = dataclasses.replace(bundle, fock_source="gaussian")
     with pytest.raises(ReferenceTypeError, match="exchange-correlation"):
         active_space_hamiltonian(stored, tol_scf=None)
+
+
+# ---------------------------------------------- strongly multireference case
+
+
+@pytest.fixture(scope="module")
+def stretched_n2():
+    mol = build_molecule("n2", "cc-pvdz")
+    mf = run_scf(mol, "RHF")
+    return mf, bundle_from_scf(mf, 2, 8, "RHF")
+
+
+def test_stretched_n2_matches_the_oracle(stretched_n2):
+    """N2 at 2.0 A has genuine multireference character; the algebra must not care."""
+    mf, bundle = stretched_n2
+    ash = active_space_hamiltonian(bundle, tol_scf=1e-8)
+    h1, e_core, eri = casci_reference(
+        mf, 2, 8, (bundle.nocc_a_act, bundle.nocc_b_act)
+    )
+    assert abs(ash.e_ref - mf.e_tot) < 1e-9
+    assert np.max(np.abs(ash.h_eff - h1)) < 1e-9
+    assert abs(ash.e_core - e_core) < 1e-9
+
+
+def test_stretched_n2_fci_is_invariant_under_rotation(stretched_n2):
+    """The case that exposed PySCF's default Davidson tolerance.
+
+    With default settings the rotated calculation lands ~4.7e-4 Ha *above* the
+    original: the HF determinant is a poor guess in a randomly rotated basis
+    for a strongly correlated system, and FCI being variational, an
+    under-converged energy can only come out high. With tight convergence the
+    two agree to ~1e-11.
+    """
+    from g16dump.rotate import random_orthogonal, rotate
+
+    _, bundle = stretched_n2
+    ash = active_space_hamiltonian(bundle, tol_scf=1e-8)
+    nelecas = (ash.nocc_a_act, ash.nocc_b_act)
+
+    before = tight_fci(ash.h_eff, ash.eri_act, 8, nelecas)
+    u = random_orthogonal(8, np.random.default_rng(1))
+    h_rot, eri_rot, _ = rotate(ash.h_eff, ash.eri_act, ash.e_core, u)
+    after = tight_fci(h_rot, eri_rot, 8, nelecas)
+
+    assert abs(before - after) < 1e-9

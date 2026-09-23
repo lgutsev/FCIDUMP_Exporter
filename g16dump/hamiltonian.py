@@ -51,7 +51,7 @@ collapse:
 
 which is exactly the expression in ``legacy/FCIDUMP_Write_MOe.py``, differing
 only in that ``f_tu`` is the full Fock matrix here and ``diag(orbital energies)``
-there. Those agree only for canonical RHF orbitals; ``test_legacy_regression.py``
+there. Those agree only for canonical RHF orbitals; ``test_vs_pyscf.py``
 demonstrates both the agreement and, for rotated orbitals, the failure.
 """
 

@@ -8,10 +8,13 @@ frozen core is folded analytically into an effective one-electron Hamiltonian
 `h'` and a scalar `E_core`. This takes seconds where a full-space dump takes
 days.
 
-**Status: M0 (inventory). Nothing downstream of the reader is implemented yet.**
-The Gaussian route section in `gaussian/` is still unverified, and the
-matrix-element labels for the Fock matrices are unconfirmed. See
-[Project status](#project-status).
+**Status: the core package is implemented and validated against PySCF (M2
+gates pass); the Gaussian side is not yet verified.** Every downstream stage --
+bundle, frozen-core algebra, FCIDUMP writer, rotations, CLI -- has been checked
+against an independent code on real molecules. What has *not* happened yet is a
+real Gaussian `.mat` going through `g16dump extract`: the route section in
+`gaussian/` and the Fock-matrix labels remain unconfirmed until the two M0 probe
+jobs have run. See [Project status](#project-status).
 
 ## Why this exists
 
@@ -163,10 +166,14 @@ g16dump/      matfile.py   .mat -> .npz bundle (the only module importing QCMatE
               hamiltonian.py   h', E_core, E_ref from Fock matrices
               rotate.py    unitary rotations inside the active space
               write.py     vectorized FCIDUMP writer + Dice nocc line
-              cli.py       g16dump extract / g16dump dump
+              solvers.py   Dice / Block2 inputs, output parsers, FCI validation
+              manifest.py  benchmark manifests (JSON) and Gaussian job generation
+              sweep.py     active-space sweeps and convergence analysis
+              cli.py       extract / dump / validate / rotate / info
 gaussian/     route templates + how to run them
 legacy/       the original scripts, untouched, for reference and regression
-scripts/      inspect_mat.py, the matrix-element probe
+scripts/      inspect_mat.py (the .mat probe), gate_report.py (the M2 gates)
+benchmarks/   systems.json, the benchmark manifest
 tests/        fixtures as committed .npz, no Gaussian and no gauopen needed
 ```
 
@@ -174,6 +181,96 @@ The split exists because gauopen may not build everywhere and needs a compiled
 component. `matfile.py` runs on the cluster and emits a plain `.npz`; everything
 downstream reads only the `.npz`, and the tests run off committed `.npz`
 fixtures.
+
+## Usage
+
+```bash
+# On the cluster, where gauopen lives. --ref-type is required: a .mat does not
+# record whether its orbitals are Hartree-Fock or Kohn-Sham.
+g16dump extract JOB.mat --ref-type ROHF --fch JOB.fch --out JOB.npz
+
+# Anywhere, with NumPy alone.
+g16dump validate JOB.npz --check-hamiltonian
+g16dump dump     JOB.npz --out FCIDUMP --dice-input input.dat
+g16dump rotate   JOB.npz --rotation U.npy --out rotated.npz
+g16dump dump     rotated.npz --out FCIDUMP.rotated
+g16dump info     JOB.npz          # summary plus full provenance
+```
+
+For Kohn-Sham orbitals, `extract` needs `--rebuild-fock --fch JOB.fch` and
+refuses to run without it.
+
+Every output records its provenance: source file, active window, reference
+type, basis and method where known, the g16dump commit, the schema version, and
+whether the Fock matrices came from Gaussian or were rebuilt with PySCF.
+
+### Why `rotate` produces a Hamiltonian file, not a bundle
+
+A general rotation of the active orbitals mixes occupied with virtual, which
+changes the reference determinant -- and therefore the density that built the
+stored Fock matrices. A rotated *bundle* would carry Fock matrices describing a
+determinant that no longer exists, and `h'` rebuilt from them would be wrong.
+The reduced Hamiltonian (`h'`, ERIs, `E_core`) has no such problem: the
+transform is exact for any orthogonal `U`, and `E_core` is unchanged because the
+frozen core is not involved. So `rotate` takes a bundle and emits a reduced
+Hamiltonian, which `dump` accepts directly.
+
+### Solvers, manifests and sweeps
+
+`g16dump.solvers` writes Dice and Block2 inputs whose reference determinant,
+electron count and spin are taken from the Hamiltonian rather than typed by
+hand. `g16dump.manifest` validates benchmark definitions -- electrons counted
+from the geometry and checked against the multiplicity and the active window --
+and generates the Gaussian jobs. `g16dump.sweep` builds active-window and
+spin-state sweeps and reports, per window, the energy change to the next larger
+space, the change in spin-state splitting, and natural-orbital diagnostics.
+
+## Validation
+
+`python3 scripts/gate_report.py` runs the M2 gates against PySCF and prints the
+residuals. Current output:
+
+```
+system                       |dE_ref|      spin   max|dh|  |dEcore| max|dERI|  roundtrip   |dE_FCI|
+---------------------------------------------------------------------------------------------------
+H2O   RHF  STO-3G            7.11e-14  0.00e+00  3.55e-15  1.42e-14  0.00e+00   8.33e-16   1.78e-14
+H2O   RHF  6-31G             8.53e-14  0.00e+00  8.88e-15  4.26e-14  0.00e+00   1.08e-15   4.90e-13
+CH2   ROHF 6-31G             2.13e-14  3.96e-15  1.09e-14  2.84e-14  0.00e+00   2.36e-15   9.72e-13
+O2    ROHF 6-31G             1.42e-13  2.00e-15  1.07e-14  5.68e-14  0.00e+00   8.05e-16   1.78e-13
+NH    ROHF 6-31G             2.13e-14  8.88e-16  4.00e-15  7.11e-15  0.00e+00   5.55e-16   1.43e-12
+N2    RHF  cc-pVDZ 2.0A      9.95e-14  0.00e+00  1.78e-15  0.00e+00  0.00e+00   2.78e-16   3.17e-12
+CH2   ROHF rotated           2.13e-14  1.76e-15  5.77e-15  2.84e-14  0.00e+00   4.00e-15   2.79e-13
+H2O   RKS  6-31G                n/a    0.00e+00  6.66e-15  2.13e-14  0.00e+00   1.01e-15   2.63e-13
+
+worst residual across all gates: 3.165e-12  (tolerance 1e-08)
+```
+
+Columns: `|E_ref - E_SCF|` (including the determinant energy rebuilt from the
+written file), `max|h'(a) - h'(b)|`, then `h'`, `E_core` and ERIs against
+PySCF's `CASCI.get_h1eff` + `ao2mo`, the FCIDUMP round trip through an
+independent parser, and the FCI energy change under a random active-space
+rotation. `E_ref` is n/a for KS because the KS total energy includes
+exchange-correlation and is not a determinant energy.
+
+"CH2 ROHF rotated" mixes orbitals inside each occupation block, which leaves the
+determinant unchanged but makes the MO Fock matrix non-diagonal by 0.35 Ha --
+the regime where `diag(orbital energies)` fails. The legacy form is off by
+0.097 Ha for canonical ROHF already, and 0.126 Ha after rotation; for canonical
+RHF it agrees with ours to 1e-7, as it should.
+
+Two findings from building the tests, both now pinned by tests:
+
+- **A C-order/Fortran-order reshape of the ERI tensor cannot be detected by
+  symmetry.** It is exactly `transpose(3,2,1,0)`, one of the eight operations the
+  8-fold symmetry already guarantees, so the tensor comes out numerically
+  identical. Index order has to be checked against an independent code.
+- **PySCF's default FCI tolerance is too loose to compare orbital bases.** On
+  stretched N2 in a randomly rotated basis it converges ~4.7e-4 Ha high. The
+  invariance tests use `conv_tol=1e-12`, which brings the two to ~1e-11.
+
+The test suite (326 tests) runs with NumPy alone; the PySCF oracle tests are
+skipped when PySCF is absent. CI runs Python 3.9-3.13 NumPy-only, plus PySCF on
+3.10 and 3.12, and fails if a core module ever imports an optional dependency.
 
 ## Installation
 
@@ -198,13 +295,26 @@ Only `g16dump extract` (i.e. `matfile.py`) needs it.
 
 | Milestone | What it delivers | State |
 |---|---|---|
-| M0 | legacy inventory, `.mat` probe, route templates | probe and templates written; **waiting on cluster output** |
-| M1 | test systems + two independent oracles | not started |
-| M2 | `bundle.py`, `hamiltonian.py`, `write.py` + gates | not started |
-| M3 | writer and solver interface | not started |
-| M4 | active-space rotations | not started |
-| M5 | benchmarks | not started |
-| M6 | packaging, CI, DOI | not started |
+| M0 | legacy inventory, `.mat` probe, route templates | probe and templates written; **waiting on the two cluster probe jobs** |
+| M1 | test systems + independent oracle | done with PySCF-generated systems; Gaussian-generated fixtures still pending M0 |
+| M2 | `bundle.py`, `hamiltonian.py`, `write.py` + gates | **gates pass** (table above) against PySCF; not yet on a real `.mat` |
+| M3 | writer and solver interface | writer, Dice/Block2 inputs done; solver output parsers unverified against real output |
+| M4 | active-space rotations | done; FCI invariance to ~1e-11 |
+| M5 | benchmarks | manifest (`benchmarks/systems.json`) and sweep tooling done; no timings run |
+| M6 | packaging, CI, DOI | CI done; `LICENSE`, `CITATION.cff`, DOI pending the author's name |
+
+What is explicitly **not yet verified**, and why:
+
+- **The Gaussian route section.** Proposed from documentation; it has not run.
+- **The Fock-matrix labels in a `.mat`.** No legacy script reads one, so
+  `matfile.py` searches rather than assumes, and falls back to
+  `--rebuild-fock` when it finds nothing.
+- **`matfile.extract` end to end.** Tested only for importability and error
+  paths; it has never read a real `.mat`.
+- **Dice and Block2 output parsers.** Written from documented formats; no real
+  output was available to check them against.
+- **Porphyrin and legacy-Fe manifest entries.** Charge, spin, basis and window
+  are specified, but the geometries are placeholders.
 
 Open questions blocking M0's gate are listed in
 [`gaussian/README.md`](gaussian/README.md) and in the probe script's output
