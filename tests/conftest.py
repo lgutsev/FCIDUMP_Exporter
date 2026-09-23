@@ -143,3 +143,25 @@ def fixture_path():
         return path
 
     return _path
+
+
+@pytest.fixture(scope="session")
+def gaussian_job(tmp_path_factory):
+    """``gaussian_job(name)`` -> a :class:`gaussian_jobs.GaussianJob`, built once.
+
+    Gaussian-side data (AO quantities in Gaussian order, a formchk-layout
+    ``.fch``) generated from a PySCF calculation. Needs pyscf; the tests that
+    read the ``.fch`` also need MOKIT and carry its marker.
+    """
+    cache: dict = {}
+    directory = tmp_path_factory.mktemp("gaussian_jobs")
+
+    def _job(name: str):
+        if name not in cache:
+            pytest.importorskip("pyscf")
+            from gaussian_jobs import JOBS, GaussianJob
+
+            cache[name] = GaussianJob(name, JOBS[name], directory)
+        return cache[name]
+
+    return _job
