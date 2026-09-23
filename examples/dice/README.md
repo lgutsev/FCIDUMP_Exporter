@@ -99,23 +99,54 @@ prints as `E_ref` for the same bundle. A number above `E_ref` means the
 determinant line, not the dump, is wrong — most often spatial indices written
 where spin indices belong.
 
-## How this example was checked, and how it was not
+## How this example was checked
 
-**Dice was not run.** It is a compiled MPI/Boost program, it is not packaged for
-installation here, and CI will not have it either. So this example is checked
-against the format rather than against the program, three ways:
+**Dice was run.** Built from source at
+[sanshar/Dice](https://github.com/sanshar/Dice) commit `f0f0850` (GCC 13,
+OpenMPI, Boost 1.83, the bundled Eigen), then pointed at the FCIDUMPs that
+`g16dump dump` produces from the committed fixtures.
+
+The `input.dat` committed here, unchanged, on the CH2 triplet dump:
+
+| | Energy (Ha) |
+|---|---|
+| Dice variational, 4343 determinants at ε₁ = 1e-4 | −38.9500600620 |
+| Dice semistochastic PT, ε₂ = 1e-8 | −38.9500834200 ± 3.4e-06 |
+| PySCF `fci.direct_spin1` on the same `h'` and active ERIs | −38.9500810680 |
+| reference determinant, `E_ref` | −38.8684854585 |
+
+The variational energy is above FCI, as an upper bound must be; the perturbative
+one brackets FCI inside its own error bar; both are below `E_ref`. The
+generated input for the closed-shell `h2o_rhf` dump behaves the same way:
+variational −75.0124993193, PT −75.0125002676 ± 4.5e-07, FCI −75.0125001540,
+`E_ref` −74.9630231385.
+
+Tightening the schedule to ε₁ = 1e-9 with deterministic PT makes the variational
+space the full space, and Dice then reproduces FCI exactly at the precision it
+prints:
+
+| System | Dice, tightened | PySCF FCI | Block2 |
+|---|---|---|---|
+| CH2 triplet, 12 orbitals, 6 electrons | −38.9500810680 | −38.9500810680 | −38.9500810680 |
+| H2O, 6 orbitals, 8 electrons | −75.0125001540 | −75.0125001540 | −75.0125001540 |
+
+Three independent codes on the same dump, agreeing to the last digit any of
+them prints.
+
+The committed `input.dat` is deliberately *not* that tightened schedule. It is a
+starting point with thresholds a real active space would want extrapolated, and
+its numbers above are what those thresholds actually buy.
+
+Separately from the run, the input was checked against the format:
 
 1. Every keyword used here appears in Dice's own documentation — `nroots`,
    `davidsonTol`, `dE`, `epsilon2`, `sampleN`, `targetError` in the
    [keyword list](https://sanshar.github.io/Dice/keywords.html), and `nocc`,
    the determinant block, `schedule`, `end` and `maxiter` in the worked example
    on the [Getting Started page](https://sanshar.github.io/Dice/gettingstarted.html).
-   Nothing here is invented, and nothing is spelled differently from those pages.
-2. The file's structure follows that same worked example: determinant block
-   first, then the variational keywords, then the perturbative ones.
-3. The determinant convention is checked against a real input, not just
-   against prose. `legacy/input_back.dat` is an input the author wrote by hand
-   for `legacy/FePorph_1_Window.dat`, a 21-orbital, 22-electron singlet dump.
+2. The determinant convention is checked against a real input, not just against
+   prose. `legacy/input_back.dat` is an input the author wrote by hand for
+   `legacy/FePorph_1_Window.dat`, a 21-orbital, 22-electron singlet dump.
    Running `make_dice_input.py` on that FCIDUMP reproduces its `nocc` block
    exactly:
 
@@ -125,16 +156,12 @@ against the format rather than against the program, three ways:
    end
    ```
 
-   Same convention, same ordering, independently derived from the header.
+3. The header parser was run against both FCIDUMPs in `legacy/`, which use a
+   different header spacing from the one this project writes, and against
+   truncated, non-FCIDUMP and impossible-multiplicity headers, to check that
+   each is refused with a message that says what is wrong.
 
-`make_dice_input.py` was run on the FCIDUMPs that
-`g16dump dump tests/data/ch2_rohf.npz` and `g16dump dump tests/data/h2o_rhf.npz`
-produce; the first reproduced the `input.dat` committed here, and the second
-gave the closed-shell `nocc 8` / `0 2 4 6 1 3 5 7` that six orbitals and eight
-electrons call for. The header parser was also run against both FCIDUMPs in
-`legacy/`, which use a different header spacing from the one this project
-writes, and against truncated, non-FCIDUMP and impossible-multiplicity headers
-to check that each is refused with a message that says what is wrong.
-
-What none of that establishes is that a particular build of Dice accepts this
-file and converges on it. That check needs Dice, and it is still outstanding.
+Dice is still not a dependency and CI will not have it: it takes a C++
+compiler, an MPI implementation and Boost with serialization and MPI to build.
+Nothing here needs it. The run above is a one-off check of this example against
+the real program.

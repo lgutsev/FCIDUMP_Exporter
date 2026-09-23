@@ -350,8 +350,59 @@ solver twice, and the correlated energies must agree. A rotation that mixes
 occupied with virtual orbitals is refused, because that replaces the reference
 determinant rather than re-expressing it; see `g16dump/rotate.py`.
 
-[`examples/`](examples/) has a complete Dice `input.dat` and a runnable Block2
-DMRG script.
+Dice reads a file named `FCIDUMP` in the directory it runs in, so the `--out`
+name is not a suggestion. The part worth checking by hand is the determinant
+block: Dice numbers **spin** orbitals, so spatial orbital `i` (0-based) is alpha
+`2i` and beta `2i + 1`, and `nocc` counts electrons, not orbitals. The example
+README explains the whole file line by line.
+
+This is checked by running Dice, built from source at commit `f0f0850`. With
+the committed `input.dat` on the CH2 triplet dump, the variational energy is
+−38.9500600620 Ha and the semistochastic PT gives −38.9500834200 ± 3.4e-06,
+bracketing the FCI value; tightening ε₁ to 1e-9 makes the variational space the
+full space and Dice returns −38.9500810680, which is PySCF's FCI and Block2's
+DMRG energy to the last digit any of them prints. H2O behaves the same way.
+Dice is not a dependency and CI does not have it — it needs a C++ compiler, MPI
+and Boost to build — so that run is a one-off check, not part of the suite.
+
+## Using the output with Block2
+
+[`examples/block2/`](examples/block2/) has a worked `dmrg.conf` and the matching
+generator:
+
+```bash
+g16dump dump JOB.npz --out FCIDUMP
+python3 examples/block2/make_block2_input.py FCIDUMP --out dmrg.conf
+block2main dmrg.conf > dmrg.out
+```
+
+`nelec`, `spin` and `sym` come straight from the FCIDUMP header — `spin` is
+`MS2`, which Block2 calls 2S, and `sym` is `c1` because g16dump writes `ORBSYM`
+all `1`. `maxM` is the one number that is a scientific choice rather than a
+transcription.
+
+This one is checked by running it. On the FCIDUMP that
+`g16dump dump tests/data/ch2_rohf.npz` produces, Block2 gives
+−38.950081068018 Ha against −38.950081068018 from an independent PySCF FCI on
+the same `h'` and active ERIs; the closed-shell `tests/data/h2o_rhf.npz` gives
+−75.012500153955 against −75.012500153957. Both sit below their own `E_ref`, as
+an active-space ground state must.
+
+### Checking a solver result
+
+Whatever the solver, the first check is the same one: the ground-state energy it
+reports must come out below the `E_ref` that
+
+```bash
+g16dump validate JOB.npz --hamiltonian
+```
+
+prints for the same bundle, because that is the energy of a determinant inside
+the space the solver is diagonalizing. A number above `E_ref` means the solver
+was pointed at the wrong determinant or the wrong symmetry sector — a wrong
+`nocc` line, a wrong `spin`, a wrong `ORBSYM` — not that the dump is wrong. It
+is worth making every time; a DMRG run that has converged to the wrong state
+looks exactly like one that has converged.
 
 ## KS warning
 
@@ -434,17 +485,18 @@ needs any of these.
 | Milestone | What it delivers | State |
 |---|---|---|
 | M0 | legacy inventory, `.mat` probe, route templates | probe and templates written; **waiting on cluster output** |
-| M1 | test systems + two independent oracles | six `.npz` fixtures committed (RHF, two ROHF, a rotated ROHF, a Roothaan one to be rejected, and a real B3LYP set); `h'` and `E_core` checked against a full-transform route |
+| M1 | test systems + two independent oracles | seven `.npz` fixtures committed: H2O RHF, CH2 triplet ROHF, the same CH2 with a Roothaan operator to be rejected, a rotated CH2, NH triplet ROHF, a real B3LYP set, and one with frozen virtuals. `h'` and `E_core` are checked against a full AO&rarr;MO transform written with explicit loops that imports nothing from `g16dump` |
 | M2 | `bundle.py`, `hamiltonian.py` + gates | done, with the schema, electron-count, window, Hermiticity, orthonormality, ERI-symmetry and α/β gates |
-| M3 | writer and solver interface | done; read back by an independent parser and by PySCF, reference energy reproduced to 1e-9 Ha |
+| M3 | writer and solver interface | done; read back by an independent parser and by PySCF, reference energy reproduced to 1e-9 Ha. The Dice and Block2 examples were **both run against the real solvers**: Dice, built from source at `f0f0850`, and Block2 each reproduce an independent PySCF FCI on the CH2 and H2O dumps to the last digit any of them prints |
 | M4 | active-space rotations | done; every energy and the FCI ground state verified invariant |
 | M5 | benchmarks | preserved on `claude/benchmarks-and-sweeps`, deliberately not a release blocker |
 | M6 | packaging, CI, DOI | CI, packaging, LICENSE and usage examples done; `CITATION.cff` awaits attribution, DOI still open |
 
 What M0 still gates is `extract` alone. Everything downstream of the bundle is
 exercised by the committed fixtures, so the labels in `g16dump.matfile.LABELS`
-are the only thing waiting on a real `.mat`. The two probe jobs and the
-procedure for reading their result are in
+are the only thing waiting on a real `.mat`. Twelve probe jobs and a runner
+that executes them in one command are in [`gaussian/`](gaussian/), with the
+procedure for reading their result in
 [`gaussian/README.md`](gaussian/README.md); both of the likely outcomes -- real
 `f^α`/`f^β`, or the Roothaan operator -- are already handled, which is why the
 writer and the rotations did not wait on it.
