@@ -1,16 +1,37 @@
-"""Active-space rotation gates.
+"""Rotations inside the active space, and the invariances they buy.
 
-The scientific claim is that an orthogonal ``U`` re-expresses the active space
-without changing the physics, so the tests are invariants rather than reference
-values: the many-body spectrum, ``E_core``, the electron counts and the
-permutational symmetry of the ERIs all have to survive a random rotation.
+A rotation of the active orbitals among themselves cannot change any physical
+quantity. That makes it the cheapest strong test available here: the whole
+pipeline is run twice on orbitals that differ completely, and every number that
+should be invariant is required to be.
 
-The strongest of them, :func:`test_the_many_body_spectrum_is_invariant`,
-diagonalises the full determinant space before and after and compares every
-eigenvalue. It needs neither Gaussian nor PySCF: ``tests/fcidump_oracle.py``
-builds the many-electron Hamiltonian from the Slater-Condon rules with numpy
-alone, so this runs in the core CI job. The PySCF-marked tests repeat the same
-claim on the real fixtures and through a written FCIDUMP.
+The tests are ordered by how much they would hurt to lose:
+
+1. ``E_core``, ``E_ref`` and the electron counts survive a rotation. These come
+   from the Fock matrices and the ERIs by different routes, so agreeing after a
+   rotation is not a tautology.
+2. The spectrum of the active Hamiltonian survives. This is the invariance that
+   actually protects a CI or DMRG result, and it is checked directly on the
+   FCIDUMP-ready quantities.
+3. A rotated bundle is still a bundle: it validates, and it can be rotated
+   again. Without that, the rotation is a dead end rather than a transform.
+4. A rotation that mixes occupied with virtual active orbitals is refused with
+   its cause named. Such a rotation is perfectly orthogonal and looks harmless;
+   what it does is replace the reference determinant rather than re-express it,
+   because the windowed algebra identifies the occupied active orbitals by index
+   order. Left to itself it surfaces two steps later as an alpha/beta
+   disagreement, so it is caught where it happens.
+5. A non-orthogonal matrix is refused. It would change the spectrum silently,
+   which is the one failure mode nothing downstream could catch.
+
+Every invariance test therefore uses ``random_block_rotation``, which mixes
+orbitals only within the doubly occupied, singly occupied and virtual groups --
+the same partition ``tests/make_fixtures.py`` uses to build the rotated fixture.
+A test that used a general rotation would not be testing invariance; it would be
+asserting something false.
+
+One test diagonalises the active Hamiltonian with PySCF's FCI solver and is
+marked ``pyscf``; the rest run on numpy alone.
 """
 
 from __future__ import annotations
@@ -18,34 +39,18 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from g16dump.bundle import BundleError, load, save, validate
-from g16dump.hamiltonian import HamiltonianError, active_hamiltonian
-from g16dump.rotate import (
-    RotationError,
-    RotationWarning,
-    check_orthogonal,
-    occupation_leakage,
-    preserves_occupied_space,
-    random_orthogonal,
-    rotate_active_space,
-    rotate_hamiltonian,
-    transform_eri,
-    transform_one_body,
-)
+from g16dump import rotate as R
+from g16dump.bundle import BundleError, load, validate
+from g16dump.hamiltonian import active_hamiltonian
 from g16dump.write import write_fcidump
 
-from fcidump_oracle import exact_spectrum, read_fcidump, spin_occupations
-
-FIXTURES = ("h2o_rhf", "ch2_rohf")
-
-
-@pytest.fixture
-def hamiltonians(fixture_path):
-    def _build(name):
-        bundle = load(fixture_path(name))
-        return bundle, active_hamiltonian(bundle)
-
-    return _build
+SOUND = [
+    "h2o_rhf",
+    "ch2_rohf",
+    "ch2_rohf_rotated",
+    "nh_rohf",
+    "h2o_frozen_virtual",
+]
 
 
 @pytest.fixture
@@ -56,467 +61,482 @@ def bundles(fixture_path):
     return _load
 
 
-def block_diagonal_rotation(bundle, seed=0):
-    """A ``U`` that mixes occupied among occupied and virtual among virtual.
-
-    The occupied space is untouched, so the reference determinant and the stored
-    Fock matrices survive. This is the shape a localisation or a natural-orbital
-    transformation has.
-    """
-    nact = bundle.nact
-    blocks, start = [], 0
-    for boundary in sorted({bundle.nocc_active_beta, bundle.nocc_active_alpha, nact}):
-        if boundary > start:
-            blocks.append(random_orthogonal(boundary - start, seed=seed + start))
-            start = boundary
-    rotation = np.zeros((nact, nact))
-    offset = 0
-    for block in blocks:
-        size = block.shape[0]
-        rotation[offset:offset + size, offset:offset + size] = block
-        offset += size
-    return rotation
+# ------------------------------------------------------------- the invariances
 
 
-# ----------------------------------------------------------- the matrix gate
+@pytest.mark.parametrize("name", SOUND)
+def test_every_energy_survives_a_rotation(bundles, name):
+    """The claim the whole module exists to make."""
+    bundle = bundles(name)
+    plain = active_hamiltonian(bundle)
+    rotated = active_hamiltonian(
+        R.rotate_active_space(bundle, R.random_block_rotation(bundle, 4242))
+    )
+
+    assert rotated.e_core == pytest.approx(plain.e_core, abs=1e-9)
+    assert rotated.e_ref == pytest.approx(plain.e_ref, abs=1e-9)
+    assert rotated.e_act == pytest.approx(plain.e_act, abs=1e-9)
+    assert rotated.nelec_active == plain.nelec_active
+    assert rotated.ms2 == plain.ms2
+    assert rotated.nact == plain.nact
 
 
-def test_a_non_orthogonal_matrix_is_refused():
-    scaled = 1.5 * np.eye(4)
-    with pytest.raises(RotationError, match="not orthogonal"):
-        check_orthogonal(scaled, 4)
+@pytest.mark.parametrize("name", SOUND)
+def test_the_reference_energy_still_matches_the_scf_energy(bundles, name):
+    """Invariance against an outside number, not merely against ourselves."""
+    bundle = bundles(name)
+    rotated = R.rotate_active_space(bundle, R.random_block_rotation(bundle, 7))
+    assert bundle.escf is not None
+    assert active_hamiltonian(rotated).e_ref == pytest.approx(bundle.escf, abs=1e-9)
 
 
-def test_diagnostic_mode_lets_a_non_orthogonal_matrix_through():
-    scaled = 1.5 * np.eye(4)
-    with pytest.warns(RotationWarning, match="diagnostic mode"):
-        assert check_orthogonal(scaled, 4, diagnostic=True) is not None
-
-
-def test_a_non_orthogonal_rotation_really_does_move_the_spectrum(hamiltonians):
-    """Why the gate exists, rather than an assertion that it fires."""
-    _, hamiltonian = hamiltonians("h2o_rhf")
-    scaled = 1.0001 * random_orthogonal(hamiltonian.nact, seed=3)
-
-    with pytest.warns(RotationWarning):
-        rotated = rotate_hamiltonian(hamiltonian, scaled, diagnostic=True)
-
-    before = np.linalg.eigvalsh(hamiltonian.h_eff)
-    after = np.linalg.eigvalsh(rotated.h_eff)
-    assert not np.allclose(before, after, atol=1e-9)
-
-
-@pytest.mark.parametrize(
-    "rotation, message",
-    [
-        (np.eye(3), "expected"),
-        (np.ones(4), "expected"),
-        (np.full((4, 4), np.nan), "non-finite"),
-    ],
-)
-def test_a_misshapen_rotation_is_refused(rotation, message):
-    with pytest.raises(RotationError, match=message):
-        check_orthogonal(rotation, 4)
-
-
-def test_random_orthogonal_is_orthogonal_and_reproducible():
-    first = random_orthogonal(7, seed=11)
-    assert np.allclose(first.T @ first, np.eye(7), atol=1e-13)
-    assert np.array_equal(first, random_orthogonal(7, seed=11))
-    assert not np.array_equal(first, random_orthogonal(7, seed=12))
-
-
-# ------------------------------------------------------------ the transforms
-
-
-def test_the_eri_transform_agrees_with_the_literal_contraction():
-    """``tensordot`` four times, against the expression it is an optimisation of."""
-    rng = np.random.default_rng(5)
-    factors = rng.normal(size=(4, 4, 6))
-    factors = 0.5 * (factors + factors.transpose(1, 0, 2))
-    eri = np.einsum("tux,vwx->tuvw", factors, factors)
-    u = random_orthogonal(4, seed=5)
-
-    assert np.allclose(
-        transform_eri(eri, u),
-        np.einsum("pqrs,pt,qu,rv,sw->tuvw", eri, u, u, u, u),
-        atol=1e-12,
+@pytest.mark.parametrize("name", SOUND)
+def test_the_spectrum_of_h_effective_is_invariant(bundles, name):
+    """``h' -> U.T h' U`` is a similarity transform, so the eigenvalues hold."""
+    bundle = bundles(name)
+    plain = active_hamiltonian(bundle).h_eff
+    rotated = active_hamiltonian(
+        R.rotate_active_space(bundle, R.random_block_rotation(bundle, 11))
+    ).h_eff
+    np.testing.assert_allclose(
+        np.linalg.eigvalsh(rotated), np.linalg.eigvalsh(plain), atol=1e-9
     )
 
 
-def test_the_transforms_undo_each_other(hamiltonians):
-    _, hamiltonian = hamiltonians("ch2_rohf")
-    u = random_orthogonal(hamiltonian.nact, seed=2)
-
-    assert np.allclose(
-        transform_one_body(transform_one_body(hamiltonian.h_eff, u), u.T),
-        hamiltonian.h_eff,
-        atol=1e-12,
-    )
-    assert np.allclose(
-        transform_eri(transform_eri(hamiltonian.eri_active, u), u.T),
-        hamiltonian.eri_active,
-        atol=1e-12,
-    )
+@pytest.mark.parametrize("name", SOUND)
+def test_h_effective_transforms_the_way_it_should(bundles, name):
+    """Not just invariant in spectrum: equal to ``U.T h' U`` element by element."""
+    bundle = bundles(name)
+    rotation = R.random_block_rotation(bundle, 99)
+    plain = active_hamiltonian(bundle).h_eff
+    rotated = active_hamiltonian(R.rotate_active_space(bundle, rotation)).h_eff
+    np.testing.assert_allclose(rotated, rotation.T @ plain @ rotation, atol=1e-9)
 
 
-# ------------------------------------------------- rotating the Hamiltonian
+@pytest.mark.parametrize("name", SOUND)
+def test_the_two_electron_invariants_hold(bundles, name):
+    """Traces of the ERI tensor that a four-index orthogonal transform preserves."""
+    bundle = bundles(name)
+    rotated = R.rotate_active_space(bundle, R.random_block_rotation(bundle, 3))
+    for eri in (bundle.eri_active, rotated.eri_active):
+        assert np.isfinite(eri).all()
+    plain_j = np.einsum("ttuu->", bundle.eri_active)
+    plain_k = np.einsum("tuut->", bundle.eri_active)
+    assert np.einsum("ttuu->", rotated.eri_active) == pytest.approx(plain_j, abs=1e-9)
+    assert np.einsum("tuut->", rotated.eri_active) == pytest.approx(plain_k, abs=1e-9)
 
 
-@pytest.mark.parametrize("name", FIXTURES)
-def test_a_rotation_preserves_the_scalars_and_the_one_body_spectrum(
-    name, hamiltonians
+def test_a_rotated_fcidump_carries_the_same_header_and_core_energy(
+    bundles, tmp_path
 ):
-    _, hamiltonian = hamiltonians(name)
-    u = random_orthogonal(hamiltonian.nact, seed=17)
-    rotated = rotate_hamiltonian(hamiltonian, u)
+    """What a solver is handed differs only in representation."""
+    bundle = bundles("ch2_rohf")
+    plain = active_hamiltonian(bundle)
+    rotated = active_hamiltonian(
+        R.rotate_active_space(bundle, R.random_block_rotation(bundle, 5))
+    )
+    first = write_fcidump(plain, tmp_path / "a.FCIDUMP")
+    second = write_fcidump(rotated, tmp_path / "b.FCIDUMP")
 
-    assert rotated.e_core == hamiltonian.e_core
-    assert rotated.nact == hamiltonian.nact
-    assert rotated.nelec_active == hamiltonian.nelec_active
-    assert rotated.ms2 == hamiltonian.ms2
-    assert np.allclose(
-        np.linalg.eigvalsh(rotated.h_eff),
-        np.linalg.eigvalsh(hamiltonian.h_eff),
-        atol=1e-11,
+    head = [p.read_text().split("&END")[0] for p in (first, second)]
+    assert head[0] == head[1]
+    assert len(first.read_text().splitlines()) == len(second.read_text().splitlines())
+    assert rotated.e_core == pytest.approx(plain.e_core, abs=1e-9)
+
+
+# ------------------------------------------------- a rotated bundle is a bundle
+
+
+@pytest.mark.parametrize("name", SOUND)
+def test_a_rotated_bundle_validates(bundles, name):
+    bundle = bundles(name)
+    validate(R.rotate_active_space(bundle, R.random_block_rotation(bundle, 1)))
+
+
+@pytest.mark.parametrize("name", SOUND)
+def test_rotations_compose(bundles, name):
+    """Rotating twice equals rotating once by the product, so it is a real transform."""
+    bundle = bundles(name)
+    first = R.random_block_rotation(bundle, 21)
+    second = R.random_block_rotation(bundle, 22)
+
+    twice = R.rotate_active_space(R.rotate_active_space(bundle, first), second)
+    once = R.rotate_active_space(bundle, first @ second)
+
+    np.testing.assert_allclose(twice.C, once.C, atol=1e-10)
+    np.testing.assert_allclose(twice.eri_active, once.eri_active, atol=1e-8)
+
+
+def test_the_identity_changes_nothing(bundles):
+    bundle = bundles("ch2_rohf")
+    rotated = R.rotate_active_space(bundle, np.eye(bundle.nact))
+    np.testing.assert_allclose(rotated.C, bundle.C, atol=1e-14)
+    np.testing.assert_allclose(rotated.eri_active, bundle.eri_active, atol=1e-12)
+
+
+def test_rotating_back_recovers_the_original(bundles):
+    """``U`` then ``U.T`` is the identity, which is a round trip with no writer."""
+    bundle = bundles("ch2_rohf")
+    rotation = R.random_block_rotation(bundle, 31)
+    there = R.rotate_active_space(bundle, rotation)
+    back = R.rotate_active_space(there, rotation.T)
+    np.testing.assert_allclose(back.C, bundle.C, atol=1e-10)
+    np.testing.assert_allclose(back.eri_active, bundle.eri_active, atol=1e-8)
+
+
+def test_the_orbitals_really_moved(bundles):
+    """Guard the guard: an invariance test against an unchanged bundle proves nothing."""
+    bundle = bundles("ch2_rohf")
+    rotated = R.rotate_active_space(bundle, R.random_block_rotation(bundle, 8))
+    active = bundle.active
+    change = float(
+        np.max(np.abs(rotated.C[:, active] - bundle.C[:, active]))
+    )
+    assert change > 0.1, f"the rotation barely moved the orbitals ({change:.3e})"
+    assert float(np.max(np.abs(rotated.eri_active - bundle.eri_active))) > 1e-3
+
+
+def test_the_frozen_core_is_untouched(bundles):
+    """A rotation is inside the window; a core orbital that moved would be a bug."""
+    bundle = bundles("ch2_rohf")
+    assert bundle.active_start > 0, "this fixture has no frozen core to check"
+    rotated = R.rotate_active_space(bundle, R.random_block_rotation(bundle, 9))
+    np.testing.assert_array_equal(
+        rotated.C[:, : bundle.active_start],
+        bundle.C[:, : bundle.active_start],
     )
 
 
-@pytest.mark.parametrize("name", FIXTURES)
-def test_a_rotation_preserves_the_tensor_invariants(name, hamiltonians):
-    """Traces and norms: cheap diagnostics that move the moment ``U`` is wrong."""
-    _, hamiltonian = hamiltonians(name)
-    u = random_orthogonal(hamiltonian.nact, seed=23)
-    rotated = rotate_hamiltonian(hamiltonian, u)
+def test_the_frozen_virtuals_are_untouched(bundles):
+    """Uses the one fixture that actually has frozen virtuals.
 
-    def invariants(h):
-        eri = np.asarray(h.eri_active)
-        return (
-            float(np.trace(h.h_eff)),
-            float(np.linalg.norm(h.h_eff)),
-            float(np.einsum("ttuu->", eri)),
-            float(np.einsum("tuut->", eri)),
-            float(np.linalg.norm(eri)),
-        )
-
-    assert invariants(rotated) == pytest.approx(invariants(hamiltonian), abs=1e-9)
-
-
-@pytest.mark.parametrize("name", FIXTURES)
-def test_a_rotated_eri_keeps_its_permutational_symmetry(name, hamiltonians):
-    _, hamiltonian = hamiltonians(name)
-    eri = rotate_hamiltonian(
-        hamiltonian, random_orthogonal(hamiltonian.nact, seed=29)
-    ).eri_active
-
-    assert np.allclose(eri, eri.transpose(1, 0, 2, 3), atol=1e-12)
-    assert np.allclose(eri, eri.transpose(0, 1, 3, 2), atol=1e-12)
-    assert np.allclose(eri, eri.transpose(2, 3, 0, 1), atol=1e-12)
-
-
-def test_the_identity_rotation_changes_nothing(hamiltonians):
-    _, hamiltonian = hamiltonians("ch2_rohf")
-    rotated = rotate_hamiltonian(hamiltonian, np.eye(hamiltonian.nact))
-
-    assert np.allclose(rotated.h_eff, hamiltonian.h_eff, atol=1e-14)
-    assert np.allclose(rotated.eri_active, hamiltonian.eri_active, atol=1e-14)
-    assert rotated.e_ref == pytest.approx(hamiltonian.e_ref, abs=1e-10)
-
-
-def test_a_rotation_within_the_occupied_space_leaves_the_reference_energy_alone(
-    bundles, hamiltonians
-):
-    bundle, hamiltonian = hamiltonians("ch2_rohf")
-    rotated = rotate_hamiltonian(hamiltonian, block_diagonal_rotation(bundle, seed=4))
-
-    assert rotated.e_ref == pytest.approx(hamiltonian.e_ref, abs=1e-10)
-    assert rotated.e_act == pytest.approx(hamiltonian.e_act, abs=1e-10)
-
-
-def test_mixing_occupied_with_virtual_moves_the_reference_determinant(hamiltonians):
-    """Not a bug: it is a different determinant, and ``e_ref`` says so."""
-    _, hamiltonian = hamiltonians("h2o_rhf")
-    rotated = rotate_hamiltonian(
-        hamiltonian, random_orthogonal(hamiltonian.nact, seed=31)
-    )
-
-    assert rotated.e_core == hamiltonian.e_core
-    assert rotated.e_ref != pytest.approx(hamiltonian.e_ref, abs=1e-6)
-    assert rotated.e_ref > hamiltonian.e_ref  # the SCF determinant was the lowest
-
-
-# ------------------------------------------------- the many-body invariance
-
-
-def test_the_many_body_spectrum_is_invariant():
-    """Every FCI eigenvalue, before and after a random rotation. No Gaussian, no PySCF.
-
-    Four active orbitals with three electrons: 24 determinants, small enough to
-    diagonalise outright and open-shell enough that the alpha and beta spaces
-    differ.
+    Every other fixture windows to the top of the MO space
+    (``act_stop == nmo``), so asserting on ``mo_coeff[:, act_stop:]`` there
+    compares two empty arrays and passes whatever the code does.
+    ``h2o_frozen_virtual`` windows MOs 2-10 of 13, leaving three.
     """
-    rng = np.random.default_rng(97)
-    nact, nalpha, nbeta, e_core = 4, 2, 1, -12.25
-    h_eff = rng.normal(size=(nact, nact))
-    h_eff = 0.5 * (h_eff + h_eff.T)
-    factors = rng.normal(size=(nact, nact, nact + 2))
-    factors = 0.5 * (factors + factors.transpose(1, 0, 2))
-    eri = np.einsum("tux,vwx->tuvw", factors, factors)
+    bundle = bundles("h2o_frozen_virtual")
+    frozen_count = bundle.nmo - bundle.active_stop
+    assert frozen_count == 3, "this test exists for the non-empty slice"
 
-    u = random_orthogonal(nact, seed=97)
-    before = exact_spectrum(h_eff, eri, e_core, nalpha, nbeta)
-    after = exact_spectrum(
-        transform_one_body(h_eff, u), transform_eri(eri, u), e_core, nalpha, nbeta
+    rotated = R.rotate_active_space(bundle, R.random_block_rotation(bundle, 9))
+    frozen = rotated.C[:, bundle.active_stop :]
+    assert frozen.size > 0
+    np.testing.assert_array_equal(frozen, bundle.C[:, bundle.active_stop :])
+
+
+def test_frozen_virtuals_do_not_change_any_energy(bundles):
+    """The frozen-virtual path, end to end, against an outside number."""
+    bundle = bundles("h2o_frozen_virtual")
+    plain = active_hamiltonian(bundle)
+    rotated = active_hamiltonian(
+        R.rotate_active_space(bundle, R.random_block_rotation(bundle, 41))
     )
-
-    assert np.allclose(before, after, atol=1e-10)
-
-
-def test_the_many_body_spectrum_moves_under_a_non_orthogonal_matrix():
-    """The invariance above is a real constraint, not an artefact of the oracle."""
-    rng = np.random.default_rng(98)
-    nact, nalpha, nbeta = 4, 2, 1
-    h_eff = rng.normal(size=(nact, nact))
-    h_eff = 0.5 * (h_eff + h_eff.T)
-    factors = rng.normal(size=(nact, nact, nact + 2))
-    factors = 0.5 * (factors + factors.transpose(1, 0, 2))
-    eri = np.einsum("tux,vwx->tuvw", factors, factors)
-
-    stretched = random_orthogonal(nact, seed=98) @ np.diag([1.0, 1.05, 1.0, 1.0])
-    before = exact_spectrum(h_eff, eri, 0.0, nalpha, nbeta)
-    after = exact_spectrum(
-        transform_one_body(h_eff, stretched),
-        transform_eri(eri, stretched),
-        0.0,
-        nalpha,
-        nbeta,
-    )
-
-    assert not np.allclose(before, after, atol=1e-6)
+    assert plain.e_ref == pytest.approx(bundle.escf, abs=1e-9)
+    assert rotated.e_ref == pytest.approx(bundle.escf, abs=1e-9)
+    assert rotated.e_core == pytest.approx(plain.e_core, abs=1e-9)
 
 
-def test_a_rotated_hamiltonian_survives_the_round_trip_to_a_file(
-    hamiltonians, tmp_path
-):
-    """Items 8 and 9 together: rotate, write, read back with the foreign parser."""
-    _, hamiltonian = hamiltonians("ch2_rohf")
-    rotated = rotate_hamiltonian(
-        hamiltonian, random_orthogonal(hamiltonian.nact, seed=41)
-    )
-    parsed = read_fcidump(write_fcidump(rotated, tmp_path / "FCIDUMP"))
-
-    assert parsed["NELEC"] == hamiltonian.nelec_active
-    assert parsed["MS2"] == hamiltonian.ms2
-    assert spin_occupations(parsed["NELEC"], parsed["MS2"]) == (4, 2)
-    assert np.allclose(parsed["H1"], rotated.h_eff, atol=1e-12)
-    assert np.allclose(parsed["H2"], rotated.eri_active, atol=1e-12)
-    assert parsed["ECORE"] == pytest.approx(hamiltonian.e_core, abs=1e-12)
-
-
-# ---------------------------------------------------- rotating the bundle
-
-
-def test_a_rotated_bundle_still_validates(bundles):
+def test_the_ao_basis_matrices_are_untouched(bundles):
+    """They are stored in the AO basis so that a rotation cannot reach them."""
     bundle = bundles("ch2_rohf")
-    rotated = rotate_active_space(bundle, block_diagonal_rotation(bundle, seed=6))
-
-    validate(rotated)  # raises BundleError if the orbitals stopped being orbitals
-    assert rotated.nact == bundle.nact
-    assert rotated.nelec == bundle.nelec
-    assert np.array_equal(rotated.Hcore_ao, bundle.Hcore_ao)
-    assert np.array_equal(rotated.S, bundle.S)
-    assert rotated.enuc == bundle.enuc
+    rotated = R.rotate_active_space(bundle, R.random_block_rotation(bundle, 10))
+    np.testing.assert_array_equal(rotated.Hcore_ao, bundle.Hcore_ao)
+    np.testing.assert_array_equal(rotated.S, bundle.S)
+    np.testing.assert_array_equal(rotated.F_alpha_ao, bundle.F_alpha_ao)
 
 
-def test_a_rotated_bundle_reproduces_the_rotated_hamiltonian(bundles):
-    """The gate that ties the two rotation paths together.
-
-    Rotating the orbitals and re-deriving ``h'`` from the Fock matrices has to
-    land on the same Hamiltonian as rotating ``h'`` directly. It is the check
-    that the bundle stayed self-consistent.
-    """
+def test_stale_orbital_energies_are_dropped(bundles):
+    """They described the old orbitals; keeping them would be a lie with a number."""
     bundle = bundles("ch2_rohf")
-    u = block_diagonal_rotation(bundle, seed=8)
-
-    from_bundle = active_hamiltonian(rotate_active_space(bundle, u))
-    from_hamiltonian = rotate_hamiltonian(active_hamiltonian(bundle), u)
-
-    assert np.allclose(from_bundle.h_eff, from_hamiltonian.h_eff, atol=1e-10)
-    assert np.allclose(from_bundle.eri_active, from_hamiltonian.eri_active, atol=1e-10)
-    assert from_bundle.e_core == pytest.approx(from_hamiltonian.e_core, abs=1e-10)
-    assert from_bundle.e_ref == pytest.approx(bundle.escf, abs=1e-8)
-
-
-def test_a_rotated_bundle_can_be_saved_and_loaded(bundles, tmp_path):
-    bundle = bundles("h2o_rhf")
-    rotated = rotate_active_space(bundle, block_diagonal_rotation(bundle, seed=10))
-    reloaded = load(save(rotated, tmp_path / "rotated.npz"))
-
-    assert np.allclose(reloaded.eri_active, rotated.eri_active, atol=1e-14)
-    assert np.allclose(reloaded.C, rotated.C, atol=1e-14)
-    assert reloaded.provenance["active_rotations"][0]["nact"] == bundle.nact
-
-
-def test_rotating_back_recovers_the_bundle(bundles):
-    bundle = bundles("h2o_rhf")
-    u = block_diagonal_rotation(bundle, seed=12)
-    there_and_back = rotate_active_space(rotate_active_space(bundle, u), u.T)
-
-    assert np.allclose(there_and_back.C, bundle.C, atol=1e-11)
-    assert np.allclose(there_and_back.eri_active, bundle.eri_active, atol=1e-11)
-    assert len(there_and_back.provenance["active_rotations"]) == 2
-
-
-def test_only_the_active_orbitals_move(bundles):
-    bundle = bundles("ch2_rohf")
-    rotated = rotate_active_space(bundle, block_diagonal_rotation(bundle, seed=14))
-
-    core = slice(0, bundle.ncore)
-    frozen_virtual = slice(bundle.active_stop, bundle.nmo)
-    assert np.array_equal(rotated.C[:, core], bundle.C[:, core])
-    assert np.array_equal(
-        rotated.C[:, frozen_virtual], bundle.C[:, frozen_virtual]
-    )
-    assert not np.allclose(
-        rotated.C[:, bundle.active], bundle.C[:, bundle.active]
-    )
-
-
-def test_the_ao_fock_matrices_are_left_alone(bundles):
-    """They are AO-basis operators; an MO rotation is not theirs to feel."""
-    bundle = bundles("ch2_rohf")
-    rotated = rotate_active_space(bundle, block_diagonal_rotation(bundle, seed=16))
-
-    assert rotated.fock_source == bundle.fock_source
-    assert np.array_equal(rotated.F_alpha_ao, bundle.F_alpha_ao)
-    assert np.array_equal(rotated.F_beta_ao, bundle.F_beta_ao)
-
-
-def test_orbital_energies_are_dropped(bundles):
-    """Within a rotated window they are the diagonal of nothing; see rotate.py."""
-    bundle = bundles("h2o_rhf")
-    assert bundle.orbital_energies is not None
-
-    rotated = rotate_active_space(bundle, block_diagonal_rotation(bundle, seed=18))
+    assert bundle.F_alpha_ao is not None
+    rotated = R.rotate_active_space(bundle, R.random_block_rotation(bundle, 12))
     assert rotated.orbital_energies is None
     assert rotated.orbital_energies_beta is None
-    assert "orbital_energies_dropped" in rotated.provenance
 
 
-def test_provenance_is_extended_not_replaced(bundles):
+def test_the_rotation_is_recorded_in_the_provenance(bundles):
+    """Orbital representation is exactly what these results are sensitive to."""
     bundle = bundles("ch2_rohf")
-    assert bundle.provenance  # otherwise this test proves nothing
-
-    rotated = rotate_active_space(bundle, block_diagonal_rotation(bundle, seed=20))
-    for key, value in bundle.provenance.items():
-        assert rotated.provenance[key] == value
-
-    record = rotated.provenance["active_rotations"][-1]
-    assert record["nact"] == bundle.nact
-    assert abs(record["determinant"]) == pytest.approx(1.0, abs=1e-10)
+    once = R.rotate_active_space(bundle, R.random_block_rotation(bundle, 13))
+    twice = R.rotate_active_space(once, R.random_block_rotation(bundle, 14))
+    assert once.provenance["rotated"] == 1
+    assert twice.provenance["rotated"] == 2
+    assert twice.provenance["rotation_orthogonality"] < R.DEFAULT_TOL
 
 
-# --------------------------------------- the occupied-space precondition
+# ------------------------------- mixing occupied with virtual is a different thing
 
 
-def test_occupation_leakage_sees_the_difference(bundles):
+@pytest.mark.parametrize("name", SOUND)
+def test_the_blocks_partition_the_window(bundles, name):
+    bundle = bundles(name)
+    blocks = R.reference_blocks(bundle)
+    assert blocks[0][0] == 0
+    assert blocks[-1][1] == bundle.nact
+    for (_, end), (start, _) in zip(blocks, blocks[1:]):
+        assert end == start
+    covered = sum(hi - lo for lo, hi in blocks)
+    assert covered == bundle.nact
+
+
+def test_a_closed_shell_has_no_singly_occupied_group(bundles):
+    assert len(R.reference_blocks(bundles("h2o_rhf"))) == 2
+
+
+def test_an_open_shell_has_all_three_groups(bundles):
     bundle = bundles("ch2_rohf")
-    assert preserves_occupied_space(bundle, block_diagonal_rotation(bundle, seed=22))
-    assert preserves_occupied_space(bundle, np.eye(bundle.nact))
-    assert occupation_leakage(bundle, random_orthogonal(bundle.nact, seed=22)) > 1e-3
+    blocks = R.reference_blocks(bundle)
+    assert len(blocks) == 3
+    assert blocks[0] == (0, bundle.nocc_active_beta)
+    assert blocks[1] == (bundle.nocc_active_beta, bundle.nocc_active_alpha)
 
 
-def test_mixing_occupied_with_virtual_drops_the_fock_matrices(bundles):
-    """The stored Fock matrices describe the old determinant; see rotate.py."""
+@pytest.mark.parametrize("name", SOUND)
+def test_mixing_occupied_with_virtual_is_refused_up_front(bundles, name):
+    """It replaces the reference determinant rather than re-expressing it.
+
+    A general rotation is orthogonal and looks entirely reasonable. What it
+    breaks is the windowed algebra's convention that the occupied active
+    orbitals are the lowest-indexed ones, and the consequence surfaces as an
+    alpha/beta disagreement two steps later. Catching it here names the cause.
+    """
+    bundle = bundles(name)
+    with pytest.raises(R.RotationError, match="occupation groups"):
+        R.rotate_active_space(bundle, R.random_rotation(bundle.nact, 101))
+
+
+def test_the_refusal_explains_itself_and_names_the_way_out(bundles):
     bundle = bundles("ch2_rohf")
-    u = random_orthogonal(bundle.nact, seed=24)
+    with pytest.raises(R.RotationError) as excinfo:
+        R.rotate_active_space(bundle, R.random_rotation(bundle.nact, 102))
+    message = str(excinfo.value)
+    assert "replaces it" in message
+    assert "random_block_rotation" in message
+    assert "allow_reference_change=True" in message
 
-    with pytest.warns(RotationWarning, match="occupied and virtual"):
-        rotated = rotate_active_space(bundle, u)
 
+def test_an_opt_in_general_rotation_is_allowed_and_recorded(bundles):
+    """A general change of basis is a real thing to want; it just is not invariant."""
+    bundle = bundles("ch2_rohf")
+    rotated = R.rotate_active_space(
+        bundle, R.random_rotation(bundle.nact, 103), allow_reference_change=True
+    )
     validate(rotated)
-    assert rotated.fock_source == "none"
-    assert rotated.F_alpha_ao is None and rotated.F_beta_ao is None
-    assert "fock_dropped_reason" in rotated.provenance
-    assert rotated.provenance["active_rotations"][-1]["occupation_leakage"] > 1e-3
+    assert rotated.provenance["rotation_changed_reference"] is True
 
 
-def test_a_bundle_whose_fock_was_dropped_refuses_to_build_a_hamiltonian(bundles):
-    """No silent wrong number: the next step says what is missing and why."""
-    bundle = bundles("ch2_rohf")
-    with pytest.warns(RotationWarning):
-        rotated = rotate_active_space(bundle, random_orthogonal(bundle.nact, seed=26))
+@pytest.mark.parametrize("name", SOUND)
+def test_a_general_rotation_is_refused_downstream_for_every_shell(bundles, name):
+    """Refused by an explicit flag, which is the only thing that works everywhere.
 
-    with pytest.raises(HamiltonianError, match="no Fock matrix"):
+    The tempting shortcut is to let the alpha/beta consistency gate catch this.
+    It does for an open shell. For a closed shell it cannot: ``F^alpha`` and
+    ``F^beta`` are the same matrix, so the two spin-derived ``h'`` agree
+    identically no matter how wrong the orbitals are. Before this was an
+    explicit check, ``h2o_rhf`` accepted a general rotation with a spin
+    deviation of exactly 0.0 and an ``E_ref`` 5.7 Ha off -- the precise failure
+    this package exists to prevent. Parametrised over every fixture so the
+    closed-shell case can never be the untested one again.
+    """
+    from g16dump.hamiltonian import HamiltonianError
+
+    bundle = bundles(name)
+    rotated = R.rotate_active_space(
+        bundle, R.random_rotation(bundle.nact, 104), allow_reference_change=True
+    )
+    with pytest.raises(HamiltonianError, match="no longer span the occupied space"):
         active_hamiltonian(rotated)
 
 
-def test_an_occupation_preserving_rotation_warns_about_nothing(bundles, recwarn):
-    bundle = bundles("ch2_rohf")
-    rotate_active_space(bundle, block_diagonal_rotation(bundle, seed=28))
-    assert [w for w in recwarn if issubclass(w.category, RotationWarning)] == []
+def test_the_closed_shell_spin_gate_really_is_blind_to_this(bundles):
+    """Guard the guard: shows why the explicit flag is load-bearing, not belt-and-braces.
 
+    If this ever starts failing -- if the spin deviation becomes non-zero for a
+    closed shell -- then the gate could have caught it after all, and the
+    reasoning in rotate.py's docstring needs revisiting.
+    """
+    from g16dump import hamiltonian as H
 
-def test_a_non_orthogonal_rotation_of_a_bundle_is_refused(bundles):
     bundle = bundles("h2o_rhf")
-    with pytest.raises(RotationError, match="not orthogonal"):
-        rotate_active_space(bundle, 2.0 * np.eye(bundle.nact))
+    rotated = R.rotate_active_space(
+        bundle, R.random_rotation(bundle.nact, 104), allow_reference_change=True
+    )
+    fock_a, fock_b = H.mo_fock_matrices(rotated)
+    from_alpha, from_beta = H.effective_one_electron(
+        fock_a, fock_b, rotated.eri_active, rotated.active,
+        rotated.nocc_active_alpha, rotated.nocc_active_beta,
+    )
+    assert float(np.max(np.abs(from_alpha - from_beta))) == 0.0
 
 
-def test_a_rotation_sized_for_the_wrong_space_is_refused(bundles):
+def test_the_refusal_names_only_the_groups_that_exist(bundles):
+    """A closed shell has two groups; reciting three names would misdescribe it."""
     bundle = bundles("h2o_rhf")
-    with pytest.raises(RotationError, match="expected"):
-        rotate_active_space(bundle, np.eye(bundle.nmo))
+    assert len(R.reference_blocks(bundle)) == 2
+    with pytest.raises(R.RotationError) as excinfo:
+        R.rotate_active_space(bundle, R.random_rotation(bundle.nact, 106))
+    message = str(excinfo.value)
+    assert "doubly occupied" in message and "virtual" in message
+    assert "singly occupied" not in message
+
+    open_shell = bundles("ch2_rohf")
+    assert len(R.reference_blocks(open_shell)) == 3
+    with pytest.raises(R.RotationError) as excinfo:
+        R.rotate_active_space(open_shell, R.random_rotation(open_shell.nact, 106))
+    assert "singly occupied" in str(excinfo.value)
 
 
-def test_a_rotated_bundle_that_lost_its_fock_still_fails_validation_loudly(bundles):
-    """A dropped Fock matrix must not be mistaken for a Gaussian-sourced one."""
-    bundle = bundles("ch2_rohf")
-    with pytest.warns(RotationWarning):
-        rotated = rotate_active_space(bundle, random_orthogonal(bundle.nact, seed=30))
+def test_group_names_follow_the_boundaries_not_the_count(bundles):
+    """Two blocks is not one shape, and naming them by counting gets two wrong.
 
+    ``reference_blocks`` drops whichever groups are empty, so a two-block window
+    can be (doubly, singly) when it is fully occupied, (doubly, virtual) for a
+    closed shell, or (singly, virtual) when the frozen core already takes every
+    beta electron. Deducing the names from ``len(blocks) == 2`` labels the last
+    two of those incorrectly.
+    """
     from dataclasses import replace
 
-    with pytest.raises(BundleError, match="no F_alpha_ao"):
-        validate(replace(rotated, fock_source="gaussian"))
+    bundle = bundles("ch2_rohf")  # nocc_active_beta=2, nocc_active_alpha=4, nact=12
 
+    closed = replace(bundle, nalpha=3, nbeta=3, nelec=6, multiplicity=1)
+    assert [n for _, _, n in R.named_reference_blocks(closed)] == [
+        "doubly occupied", "virtual",
+    ]
 
-# ---------------------------------------------------------------- via PySCF
+    # ncore == nbeta: no doubly occupied active orbital at all.
+    no_doubly = replace(bundle, nbeta=bundle.ncore)
+    assert no_doubly.nocc_active_beta == 0
+    assert [n for _, _, n in R.named_reference_blocks(no_doubly)] == [
+        "singly occupied", "virtual",
+    ]
 
+    # The window is entirely occupied: nothing virtual in it.
+    full = replace(bundle, nalpha=bundle.ncore + bundle.nact)
+    assert full.nocc_active_alpha == bundle.nact
+    assert [n for _, _, n in R.named_reference_blocks(full)] == [
+        "doubly occupied", "singly occupied",
+    ]
 
-@pytest.mark.pyscf
-@pytest.mark.parametrize("name", FIXTURES)
-def test_pyscf_fci_is_invariant_under_a_random_rotation(
-    name, hamiltonians, tmp_path
-):
-    """The same invariance on the real fixtures, through PySCF end to end."""
-    from fcidump_oracle import fci_energy_from_fcidump
-
-    _, hamiltonian = hamiltonians(name)
-    rotated = rotate_hamiltonian(
-        hamiltonian, random_orthogonal(hamiltonian.nact, seed=43)
+    assert R.reference_blocks(bundle) == tuple(
+        (lo, hi) for lo, hi, _ in R.named_reference_blocks(bundle)
     )
 
-    before = fci_energy_from_fcidump(write_fcidump(hamiltonian, tmp_path / "plain"))
-    after = fci_energy_from_fcidump(write_fcidump(rotated, tmp_path / "rotated"))
 
-    assert after == pytest.approx(before, abs=1e-9)
-
-
-@pytest.mark.pyscf
-def test_pyscf_fci_is_invariant_under_a_rotation_of_the_bundle(bundles, tmp_path):
-    """The bundle path, all the way from orbitals to a solver's input file."""
-    from fcidump_oracle import fci_energy_from_fcidump
-
+def test_a_block_rotation_is_reference_preserving_by_construction(bundles):
     bundle = bundles("ch2_rohf")
-    rotated = rotate_active_space(bundle, block_diagonal_rotation(bundle, seed=45))
+    rotation = R.random_block_rotation(bundle, 105)
+    R.check_reference_preserving(rotation, R.reference_blocks(bundle))
+    np.testing.assert_allclose(rotation.T @ rotation, np.eye(bundle.nact), atol=1e-12)
+    # and it is not secretly the identity
+    assert not np.allclose(rotation, np.eye(bundle.nact))
 
-    before = fci_energy_from_fcidump(
-        write_fcidump(active_hamiltonian(bundle), tmp_path / "plain")
+
+# --------------------------------------------------------- refusing a bad U
+
+
+def test_a_non_orthogonal_rotation_is_refused(bundles):
+    """It would change the spectrum rather than fail, so it is caught here."""
+    bundle = bundles("ch2_rohf")
+    bad = R.random_block_rotation(bundle, 15)
+    bad[0, 0] += 0.1
+    with pytest.raises(R.RotationError, match="not orthogonal"):
+        R.rotate_active_space(bundle, bad)
+
+
+def test_a_scaled_rotation_is_refused(bundles):
+    """The most plausible near-miss: orthogonal directions, wrong normalisation."""
+    bundle = bundles("ch2_rohf")
+    with pytest.raises(R.RotationError, match="not orthogonal"):
+        R.rotate_active_space(bundle, 1.01 * R.random_block_rotation(bundle, 16))
+
+
+@pytest.mark.parametrize(
+    "bad, message",
+    [
+        (np.zeros((3, 3)), "shape"),
+        (np.zeros((4,)), "shape"),
+        (np.full((12, 12), np.nan), "non-finite"),
+    ],
+)
+def test_a_malformed_rotation_is_refused_by_name(bundles, bad, message):
+    with pytest.raises(R.RotationError, match=message):
+        R.rotate_active_space(bundles("ch2_rohf"), bad)
+
+
+def test_the_tolerance_is_configurable_but_not_a_way_out(bundles):
+    bundle = bundles("ch2_rohf")
+    slightly_off = R.random_block_rotation(bundle, 17)
+    slightly_off[0, 0] += 1e-7
+    with pytest.raises(R.RotationError):
+        R.rotate_active_space(bundle, slightly_off)
+    R.rotate_active_space(bundle, slightly_off, tol=1e-5)
+
+
+def test_random_rotation_is_reproducible_and_orthogonal():
+    first = R.random_rotation(9, 2024)
+    np.testing.assert_array_equal(first, R.random_rotation(9, 2024))
+    np.testing.assert_allclose(first.T @ first, np.eye(9), atol=1e-12)
+    assert not np.allclose(first, R.random_rotation(9, 2025))
+
+
+def test_transform_eri_keeps_the_permutational_symmetry(bundles):
+    """An orthogonal transform of a symmetric tensor is still symmetric."""
+    bundle = bundles("ch2_rohf")
+    out = R.transform_eri(bundle.eri_active, R.random_block_rotation(bundle, 18))
+    np.testing.assert_allclose(out, out.transpose(1, 0, 2, 3), atol=1e-10)
+    np.testing.assert_allclose(out, out.transpose(0, 1, 3, 2), atol=1e-10)
+    np.testing.assert_allclose(out, out.transpose(2, 3, 0, 1), atol=1e-10)
+
+
+def test_a_rotation_that_breaks_the_schema_fails_here(bundles, monkeypatch):
+    """The returned bundle is validated, so a bad rotation cannot be saved later."""
+    bundle = bundles("ch2_rohf")
+    monkeypatch.setattr(
+        R, "transform_eri", lambda eri, rotation: np.full_like(np.asarray(eri), np.nan)
     )
-    after = fci_energy_from_fcidump(
-        write_fcidump(active_hamiltonian(rotated), tmp_path / "rotated")
+    with pytest.raises(BundleError):
+        R.rotate_active_space(bundle, R.random_block_rotation(bundle, 19))
+
+
+# ------------------------------------------------- the invariance that matters
+
+@pytest.mark.pyscf
+@pytest.mark.parametrize("name", ["h2o_rhf", "ch2_rohf"])
+def test_the_fci_ground_state_energy_is_unchanged(bundles, name):
+    """The strongest form of the claim: the correlated answer does not move.
+
+    ``h'`` and the active ERIs are exactly what a CI solver is handed, so
+    diagonalising them before and after a rotation asks the question a user
+    actually cares about -- whether the choice of active orbitals changes the
+    energy this pipeline reports.
+    """
+    fci = pytest.importorskip("pyscf.fci")
+
+    bundle = bundles(name)
+    plain = active_hamiltonian(bundle)
+    rotated = active_hamiltonian(
+        R.rotate_active_space(bundle, R.random_block_rotation(bundle, 2718))
     )
 
-    assert after == pytest.approx(before, abs=1e-9)
-    assert before < bundle.escf
+    nalpha = (plain.nelec_active + plain.ms2) // 2
+    nbeta = plain.nelec_active - nalpha
+
+    energies = []
+    for result in (plain, rotated):
+        energy, _ = fci.direct_spin1.kernel(
+            np.asarray(result.h_eff),
+            np.asarray(result.eri_active),
+            result.nact,
+            (nalpha, nbeta),
+            ecore=result.e_core,
+        )
+        energies.append(float(energy))
+
+    assert energies[1] == pytest.approx(energies[0], abs=1e-8), (
+        f"the FCI ground state moved by {abs(energies[1] - energies[0]):.3e} Ha "
+        f"under a rotation that cannot change it"
+    )
+    # And it must be at or below the reference determinant it was built from.
+    assert energies[0] <= plain.e_ref + 1e-9

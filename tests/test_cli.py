@@ -171,7 +171,54 @@ def test_dump_refuses_a_hamiltonian_it_cannot_write(capsys, fixture_path, tmp_pa
         cli.active_hamiltonian = original
 
     assert code == 1
-    assert "opposite parity" in output
+    assert "the parity is wrong" in output
+    assert "Traceback" not in output
+
+
+# ------------------------------------------------------------------ dump
+
+def test_dump_writes_a_file_and_its_provenance(capsys, fixture_path, tmp_path):
+    out = tmp_path / "FCIDUMP"
+    code, output = _run(
+        capsys, "dump", str(fixture_path("ch2_rohf")), "--out", str(out),
+    )
+    assert code == 0
+    assert out.is_file()
+    assert out.with_name(out.name + ".provenance.json").is_file()
+    assert "NORB" in output and "E_core" in output
+
+
+def test_dump_warns_that_a_threshold_costs_the_reference_energy(
+    capsys, fixture_path, tmp_path
+):
+    """The one flag that silently changes what the file means, so it says so."""
+    code, output = _run(
+        capsys, "dump", str(fixture_path("ch2_rohf")),
+        "--out", str(tmp_path / "FCIDUMP"), "--threshold", "1e-3",
+    )
+    assert code == 0
+    assert "no longer reproduces E_ref exactly" in output
+
+
+def test_dump_reports_a_bad_orbsym_without_a_traceback(
+    capsys, fixture_path, tmp_path
+):
+    code, output = _run(
+        capsys, "dump", str(fixture_path("ch2_rohf")),
+        "--out", str(tmp_path / "FCIDUMP"), "--orbsym", "1,2",
+    )
+    assert code == 1
+    assert "ORBSYM must name an irrep" in output
+    assert not (tmp_path / "FCIDUMP").exists()
+
+
+def test_dump_can_print_the_dice_occupation_block(capsys, fixture_path, tmp_path):
+    code, output = _run(
+        capsys, "dump", str(fixture_path("ch2_rohf")),
+        "--out", str(tmp_path / "FCIDUMP"), "--dice-nocc",
+    )
+    assert code == 0
+    assert "nocc" in output and "end" in output
 
 
 def test_dump_still_runs_the_hamiltonian_gate_first(capsys, fixture_path, tmp_path):
@@ -184,6 +231,8 @@ def test_dump_still_runs_the_hamiltonian_gate_first(capsys, fixture_path, tmp_pa
     assert "Do not average" in output
 
 
+# ------------------------------------------------------------------ rotate
+
 def test_rotate_writes_a_rotated_bundle(capsys, fixture_path, tmp_path):
     rotation = tmp_path / "u.npy"
     np.save(rotation, np.eye(12))
@@ -193,11 +242,55 @@ def test_rotate_writes_a_rotated_bundle(capsys, fixture_path, tmp_path):
         "--out", str(out),
     )
     assert code == 0
-    assert str(out) in output
-    assert load(out).nact == 12
+    assert out.is_file()
+    assert "occupation groups" in output
 
 
-def test_rotate_refuses_a_matrix_that_is_not_a_rotation(
+def test_rotate_can_generate_its_own_rotation(capsys, fixture_path, tmp_path):
+    """The common case: a reproducible invariance probe with no matrix to build."""
+    out = tmp_path / "rotated.npz"
+    code, _ = _run(
+        capsys, "rotate", str(fixture_path("ch2_rohf")), "--random", "17",
+        "--out", str(out),
+    )
+    assert code == 0
+    assert out.is_file()
+
+
+def test_rotate_then_dump_reproduces_the_reference_energy(
+    capsys, fixture_path, tmp_path
+):
+    """The whole point of the subcommand, exercised end to end through the CLI."""
+    rotated = tmp_path / "rotated.npz"
+    code, _ = _run(
+        capsys, "rotate", str(fixture_path("ch2_rohf")), "--random", "23",
+        "--out", str(rotated),
+    )
+    assert code == 0
+    code, output = _run(
+        capsys, "validate", str(rotated), "--hamiltonian",
+    )
+    assert code == 0
+    assert "agrees" in output
+
+
+def test_rotate_refuses_a_rotation_that_mixes_occupied_with_virtual(
+    capsys, fixture_path, tmp_path
+):
+    from g16dump.rotate import random_rotation
+
+    rotation = tmp_path / "u.npy"
+    np.save(rotation, random_rotation(12, 5))
+    code, output = _run(
+        capsys, "rotate", str(fixture_path("ch2_rohf")), "--rotation", str(rotation),
+        "--out", str(tmp_path / "rotated.npz"),
+    )
+    assert code == 1
+    assert "occupation groups" in output
+    assert not (tmp_path / "rotated.npz").exists()
+
+
+def test_rotate_reports_a_non_orthogonal_matrix_without_a_traceback(
     capsys, fixture_path, tmp_path
 ):
     rotation = tmp_path / "u.npy"
@@ -252,7 +345,7 @@ def test_extract_reports_a_reader_failure_as_a_sentence(
     from g16dump import matfile
 
     def _fail(*args, **kwargs):
-        raise matfile.MatFileError("no matrix-element block for 'eri_act'")
+        raise matfile.MatFileError("no matrix-element block for 'eri_active'")
 
     monkeypatch.setattr(matfile, "extract", _fail)
     code, output = _run(

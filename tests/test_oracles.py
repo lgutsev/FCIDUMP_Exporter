@@ -311,7 +311,7 @@ class Case:
 
         self.mol, self.mf, self.mo = mol, mf, mo
         self.nalpha, self.nbeta = nalpha, nbeta
-        self.act_start, self.act_stop = act_start, act_stop
+        self.active_start, self.active_stop = act_start, act_stop
         self.escf = float(mf.e_tot)
 
         self.bundle = Bundle(
@@ -523,7 +523,7 @@ def test_canonical_rhf_reduces_to_the_legacy_closed_shell_expression(case):
     """
     c = case("h2o_rhf")
     legacy = _legacy_closed_shell_h1(
-        c.orbital_energies, c.bundle.eri_active, c.act_start, c.act_stop,
+        c.orbital_energies, c.bundle.eri_active, c.active_start, c.active_stop,
         c.bundle.nocc_active_alpha,
     )
     # Loose against machine precision on purpose: a converged SCF still leaves
@@ -559,7 +559,7 @@ def test_the_legacy_expression_fails_on_noncanonical_orbitals(case):
     # the failure does not depend on which orbital energies are stored with the
     # rotated orbitals.
     legacy = _legacy_closed_shell_h1(
-        c.orbital_energies, c.bundle.eri_active, c.act_start, c.act_stop,
+        c.orbital_energies, c.bundle.eri_active, c.active_start, c.active_stop,
         c.bundle.nocc_active_beta,
     )
     discrepancy = float(np.max(np.abs(c.result.h_eff - legacy)))
@@ -579,7 +579,7 @@ def test_the_legacy_expression_also_fails_on_canonical_rohf(case):
     """
     c = case("ch2_rohf")
     legacy = _legacy_closed_shell_h1(
-        c.orbital_energies, c.bundle.eri_active, c.act_start, c.act_stop,
+        c.orbital_energies, c.bundle.eri_active, c.active_start, c.active_stop,
         c.bundle.nocc_active_beta,
     )
     assert float(np.max(np.abs(c.result.h_eff - legacy))) > 0.1

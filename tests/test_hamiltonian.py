@@ -25,7 +25,13 @@ import pytest
 from g16dump import hamiltonian as H
 from g16dump.bundle import load
 
-SOUND = ["h2o_rhf", "ch2_rohf", "ch2_rohf_rotated"]
+SOUND = [
+    "h2o_rhf",
+    "ch2_rohf",
+    "ch2_rohf_rotated",
+    "nh_rohf",
+    "h2o_frozen_virtual",
+]
 
 
 @pytest.fixture
@@ -206,6 +212,59 @@ def test_ks_orbitals_with_a_rebuilt_fock_are_accepted(bundles):
         bundles("h2o_rhf"), reference_type="RKS", fock_source="pyscf_rebuilt",
     )
     assert H.active_hamiltonian(bundle).fock_source == "pyscf_rebuilt"
+
+
+# --------------------------------------------- the KS gate, on real KS orbitals
+
+def test_a_real_ks_bundle_carries_no_fock_matrix_at_all(bundles):
+    """Not an omission: the KS matrix is not a Fock matrix, so it is not stored."""
+    bundle = bundles("h2o_rks")
+    assert bundle.reference_type == "RKS"
+    assert bundle.is_ks
+    assert bundle.fock_source == "none"
+    assert bundle.F_alpha_ao is None and bundle.F_beta_ao is None
+
+
+def test_a_real_ks_bundle_cannot_make_a_hamiltonian_on_its_own(bundles):
+    """The B3LYP case the README warns about, on actual B3LYP orbitals."""
+    with pytest.raises(H.HamiltonianError, match="exchange-correlation"):
+        H.active_hamiltonian(bundles("h2o_rks"))
+
+
+def test_the_hartree_fock_energy_in_ks_orbitals_is_a_different_number(bundles):
+    """The trap the KS path exists to avoid, stated in numbers.
+
+    Rebuilding the Fock matrix from KS orbitals gives the *Hartree-Fock* energy
+    evaluated in those orbitals. It is not the DFT total energy and must never
+    be compared against it: for H2O/6-31G/B3LYP the two differ by 0.4 Ha, which
+    is large enough to look like a bug in something else.
+    """
+    provenance = bundles("h2o_rks").provenance
+    difference = abs(provenance["e_hf_in_ks_orbitals"] - provenance["e_dft"])
+    assert difference > 0.1, (
+        "the KS fixture is supposed to show that these are different numbers"
+    )
+
+
+@pytest.mark.pyscf
+def test_rebuilding_the_fock_matrix_makes_real_ks_orbitals_usable(bundles):
+    """The documented way out, run end to end on the real thing."""
+    gto = pytest.importorskip("pyscf.gto")
+    from make_fixtures import H2O
+
+    bundle = bundles("h2o_rks")
+    rebuilt = H.with_rebuilt_fock(
+        bundle, gto.M(atom=H2O, basis="6-31g", verbose=0)
+    )
+    result = H.active_hamiltonian(rebuilt)
+
+    assert result.fock_source == "pyscf_rebuilt"
+    assert result.spin_deviation < 1e-10
+    assert result.e_ref == pytest.approx(
+        bundle.provenance["e_hf_in_ks_orbitals"], abs=1e-8
+    )
+    # And emphatically not the DFT energy, which is what e_scf holds.
+    assert result.e_ref != pytest.approx(bundle.escf, abs=1e-2)
 
 
 # --------------------------------------------------- the independent oracle

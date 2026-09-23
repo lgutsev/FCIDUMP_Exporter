@@ -1,0 +1,21 @@
+%chk=probe_ch2_uhf.chk
+%mem=2GB
+%nprocshared=1
+#P UHF/6-31G NoSymm Int=NoBasisTransform SCF=(Conver=10)
+# Output=(MatrixElement,MO2ElectronIntegrals) Tran=(Full,Force) Window=(2,13)
+
+probe_ch2_uhf: CH2 triplet UHF/6-31G, same geometry and window as the ROHF
+probe. UHF is deliberately OUT OF SCOPE for this project -- a spin-restricted
+FCIDUMP assumes one set of spatial orbitals, and UHF has two. THE POINT OF THIS
+JOB is to find out whether that is detectable from the .mat alone: does it carry
+a BETA MO COEFFICIENTS block that the restricted jobs do not? If so, the reader
+can refuse UHF input outright instead of silently using the alpha orbitals and
+returning a plausible wrong answer. Run it last; it is the cheapest of the set.
+
+0 3
+C   0.0000000   0.0000000   0.1900000
+H   0.0000000   0.9900000  -0.5600000
+H   0.0000000  -0.9900000  -0.5600000
+
+probe_ch2_uhf.mat
+

@@ -1,0 +1,49 @@
+%chk=probe_fe_porphine_singlet.chk
+%mem=16GB
+%nprocshared=8
+#P HF/6-31G NoSymm Int=NoBasisTransform SCF=(Conver=10,MaxCycle=256)
+# Output=(MatrixElement,MO2ElectronIntegrals) Tran=(Full,Force) Window=(83,103)
+
+probe_fe_porphine_singlet: Fe(II) porphine, 37 atoms, ~255 basis functions, closed-shell singlet. Window (83,103) is CAS(22,21) -- 186 electrons gives 93 occupied orbitals, so this is 11 occupied plus 10 virtual, the same active space as the legacy dumps. IMPORTANT: this is a MODEL geometry (idealised D4h, Fe-N 2.00 A), not the geometry that produced legacy/FePorph_1_Window.dat, which is not in this repository. So it will NOT reproduce the legacy energy of -2201.53 Ha, and it is not supposed to. What it does test is the pipeline on an open-shell-capable transition metal at the scale the method was built for. Expect NFC=82, NFV=NBsUse-103, NELEC=22, MS2=0.
+
+0 1
+Fe     0.00000000     0.00000000     0.00000000
+N      2.00000000     0.00000000     0.00000000
+C      2.83470041     1.09768676     0.00000000
+C      2.83470041    -1.09768676     0.00000000
+C      4.20812857     0.67500000     0.00000000
+C      4.20812857    -0.67500000     0.00000000
+H      5.07688948     1.31660305     0.00000000
+H      5.07688948    -1.31660305     0.00000000
+C      2.41568263     2.41568263     0.00000000
+H      3.17935795     3.17935795     0.00000000
+N     -0.00000000     2.00000000     0.00000000
+C     -1.09768676     2.83470041     0.00000000
+C      1.09768676     2.83470041     0.00000000
+C     -0.67500000     4.20812857     0.00000000
+C      0.67500000     4.20812857     0.00000000
+H     -1.31660305     5.07688948     0.00000000
+H      1.31660305     5.07688948     0.00000000
+C     -2.41568263     2.41568263     0.00000000
+H     -3.17935795     3.17935795     0.00000000
+N     -2.00000000    -0.00000000     0.00000000
+C     -2.83470041    -1.09768676     0.00000000
+C     -2.83470041     1.09768676     0.00000000
+C     -4.20812857    -0.67500000     0.00000000
+C     -4.20812857     0.67500000     0.00000000
+H     -5.07688948    -1.31660305     0.00000000
+H     -5.07688948     1.31660305     0.00000000
+C     -2.41568263    -2.41568263     0.00000000
+H     -3.17935795    -3.17935795     0.00000000
+N      0.00000000    -2.00000000     0.00000000
+C      1.09768676    -2.83470041     0.00000000
+C     -1.09768676    -2.83470041     0.00000000
+C      0.67500000    -4.20812857     0.00000000
+C     -0.67500000    -4.20812857     0.00000000
+H      1.31660305    -5.07688948     0.00000000
+H     -1.31660305    -5.07688948     0.00000000
+C      2.41568263    -2.41568263     0.00000000
+H      3.17935795    -3.17935795     0.00000000
+
+probe_fe_porphine_singlet.mat
+

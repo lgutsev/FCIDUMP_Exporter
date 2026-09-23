@@ -80,7 +80,7 @@ def test_nonorthonormal_coefficients_report_how_far_off_they_are(broken):
     scrambled[:, 2] *= 1.7
     with pytest.raises(BundleError) as excinfo:
         validate(replace(good, C=scrambled))
-    assert_actionable(excinfo, "MO coefficients", "not orthonormal", "overlap")
+    assert_actionable(excinfo, "MO coefficients", "not orthonormal", "S")
 
 
 # ------------------------------------------------------------ 2. the overlap

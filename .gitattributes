@@ -1,0 +1,35 @@
+# Checkout rules only. Nothing here rewrites a stored blob.
+#
+# This file is deliberately narrow. The obvious contents -- a blanket
+# `* text=auto eol=lf` -- would renormalise the whole repository, and that
+# includes `legacy/`, which is reference material this project promises is
+# byte-identical to what it received. `.github/scripts/check_legacy_untouched.sh`
+# exists to enforce exactly that, so a .gitattributes that quietly rewrote those
+# files would defeat the guard rather than help it.
+#
+# The rules below mark files as binary or as not-text. That tells Git to write
+# the stored bytes to the working tree verbatim, on every platform, and to leave
+# the stored bytes alone. Existing blobs are unaffected.
+
+# Reference material: never translated, never renormalised, on any platform.
+# Without this a Windows checkout rewrites these to CRLF, every checksum in the
+# manifest changes, and the guard fails on a tree nobody has edited -- with the
+# only clue being that the single binary file still matches.
+legacy/** -text
+
+# The manifest records checksums of the files above, so it has to travel with
+# them untranslated or the comparison is against differently-terminated lines.
+.github/legacy.sha256 -text
+
+# Shell scripts must reach Linux with LF endings or the kernel reads "\r" as
+# part of the interpreter path and the script dies as "bad interpreter". These
+# are already stored with LF, so this pins existing behaviour rather than
+# changing it, and stops a Windows checkout from committing CRLF back.
+*.sh text eol=lf
+
+# Binary formats, so Git makes no attempt to be clever about them.
+*.npz binary
+*.zip binary
+*.mat binary
+*.chk binary
+*.fch binary

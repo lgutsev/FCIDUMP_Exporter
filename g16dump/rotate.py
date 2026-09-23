@@ -1,327 +1,301 @@
 """Real orthogonal rotations inside the active space.
 
-Orbital representation is not a cosmetic choice here. The Ni-porphyrin work that
-motivated this package found the apparent multireference character to depend
-strongly on which orbitals span the active space, so being able to re-express
-one active space in another basis, exactly and reversibly, is both a feature and
-the sharpest correctness test the package has: the many-body spectrum of the
-active-space Hamiltonian is invariant under any orthogonal ``U``, so a rotation
-that moves a FCI eigenvalue is a bug with nowhere to hide.
+A rotation ``U`` mixes the active orbitals among themselves and nothing else.
+The physics cannot notice: the active space spans the same subspace afterwards,
+so every energy -- ``E_core``, ``E_ref``, and the FCI ground state of the
+resulting FCIDUMP -- is unchanged. What does change is the *representation*, and
+that is the point. Active-space results are sensitive to orbital choice in ways
+that are easy to get wrong and hard to see, so a rotation is the cheapest
+available test of a pipeline that claims not to care.
 
-Two things can be rotated, and the difference matters.
+What is transformed, and what is deliberately not:
 
-:func:`rotate_hamiltonian` rotates the **Hamiltonian** --- ``h' -> U.T h' U``,
-the four-index transform of the ERIs, ``E_core`` untouched. This is exact for
-any orthogonal ``U``, needs nothing but numpy, and is what a FCIDUMP wants.
+``mo_coeff[:, active] -> mo_coeff[:, active] @ U``
+    The orbitals themselves. Doing this, rather than transforming the Fock
+    matrices, is what keeps the bundle self-consistent: a rotated bundle is an
+    ordinary bundle and can be rotated again, or fed to
+    :func:`g16dump.hamiltonian.active_hamiltonian` unchanged.
 
-:func:`rotate_active_space` rotates the **bundle** --- the orbitals themselves,
-so the result is another bundle that can be validated, dumped or rotated again.
-This one has a precondition that :func:`rotate_hamiltonian` does not, and it is
-the whole subtlety of this module:
+``eri_act -> U' U' U' U' eri_act``
+    The four-index transform, over the active window only. It is the one piece
+    of real work here, and it stays inside the window because that is the whole
+    premise of the method.
 
-    The stored Fock matrices were built from the reference determinant's own
-    density. ``hamiltonian.py`` reaches ``h'`` by subtracting the active
-    occupied orbitals' J/K back out of ``f^sigma``, which is only the inverse of
-    what went in while the occupied *space* is the same one. A ``U`` that mixes
-    an active occupied orbital with an active virtual one changes that space, so
-    the stored ``f^sigma`` no longer describes the determinant the orbital
-    ordering now implies, and the subtraction removes the wrong thing.
+The AO-basis Fock matrices, the overlap and ``hcore_ao`` are **not** touched.
+They are stored in the AO basis precisely so that a rotation does not reach
+them; ``hamiltonian.py`` does the ``C.T F C`` transform afterwards and so sees
+the rotation through ``mo_coeff`` alone. Touching them here would double-count
+it.
 
-The answer is not to patch the Fock matrices into agreement, which would mean
-writing a matrix that is not the Fock operator of anything. It is to drop them:
-an occupation-changing rotation returns a bundle with ``fock_source="none"``, a
-warning, and the reason in its provenance. Downstream, ``active_hamiltonian``
-then refuses it and says to rebuild the Fock matrices through PySCF, which is
-the correct route for the determinant that now exists. Nothing produces a
-plausible wrong number at any point.
+``U`` is verified orthogonal before anything is transformed. A ``U`` that is not
+orthogonal silently changes the spectrum rather than failing, which is the worst
+failure this module could have.
 
-For the common case --- rotating the occupied orbitals among themselves, or the
-virtuals among themselves, as a localisation or a natural-orbital
-transformation does --- the occupied space is unchanged, the Fock matrices are
-kept, and ``active_hamiltonian`` on the rotated bundle reproduces
-``U.T h' U`` exactly. ``tests/test_rotate.py`` asserts precisely that.
+Which rotations are allowed, and why it is not all of them
+---------------------------------------------------------
+
+The windowed algebra reaches ``h'`` from the Fock matrices, which means
+subtracting the contribution of the active orbitals occupied in the reference
+determinant -- and it identifies those *by index order*, as the lowest
+``n_sigma - ncore`` of the window. That convention is what
+:func:`g16dump.bundle.Bundle.nocc_active_alpha` encodes.
+
+A rotation that mixes an occupied active orbital with a virtual one therefore
+does not merely re-express the reference determinant, it **replaces** it: the
+lowest orbitals of the rotated window no longer span the occupied space, so
+``E_ref`` and ``E_core`` are not the same quantities afterwards.
+
+So by default a rotation must be block diagonal across the three groups the
+reference determinant distinguishes inside the window -- doubly occupied, singly
+occupied, virtual -- and :func:`rotate_active_space` checks that up front. Those
+are exactly the rotations that leave every energy invariant, which is what makes
+them a test. Pass ``allow_reference_change=True`` to perform a general change of
+active-orbital basis anyway; it is a legitimate thing to want, and the resulting
+bundle records that fact in its provenance so that
+:func:`g16dump.hamiltonian.active_hamiltonian` refuses it.
+
+That refusal is an explicit flag rather than a consequence, and the difference
+matters. The obvious argument -- that the alpha/beta consistency gate will catch
+a changed reference anyway -- is true only for an open shell. For a closed shell
+``F^alpha`` and ``F^beta`` are the same matrix, the two spin-derived ``h'``
+agree identically whatever the orbitals are, and the gate reads zero deviation
+while ``E_ref`` is several Hartree wrong. Relying on it there would be exactly
+the plausible-wrong-number failure this package exists to prevent.
 """
 
 from __future__ import annotations
 
-import warnings
 from dataclasses import replace
 
 import numpy as np
 
-from .bundle import Bundle
-from .hamiltonian import ActiveHamiltonian, active_energy
+from .bundle import Bundle, validate
 
-#: ``max |U.T U - I|``. The tolerance is tight because ``U`` is an input, not a
-#: computed quantity: a caller who means an orthogonal matrix can supply one to
-#: machine precision, and a caller who cannot is telling us something.
-ORTHOGONALITY_TOL = 1e-10
+#: Rotating a rotated bundle composes, so this is not the accuracy of one
+#: transform but the drift a chain of them may accumulate before it is refused.
+DEFAULT_TOL = 1e-10
 
-#: ``max |U[occupied, virtual]|`` below which the active occupied space counts
-#: as unchanged and the bundle's Fock matrices stay valid. See the module
-#: docstring.
-OCCUPATION_TOL = 1e-10
+#: The three groups a reference determinant distinguishes inside the window, in
+#: index order. Which of them are non-empty depends on the bundle, so the names
+#: travel with the ranges rather than being matched up by counting afterwards:
+#: two blocks can be (doubly, singly), (doubly, virtual) or (singly, virtual),
+#: and guessing from the count alone gets two of those three wrong.
+GROUP_NAMES = ("doubly occupied", "singly occupied", "virtual")
 
 
 class RotationError(ValueError):
-    """The rotation is not a rotation, or does not fit the space it is given."""
+    """The rotation is not a real orthogonal matrix on the active space."""
 
 
-class RotationWarning(UserWarning):
-    """A rotation was applied, but it cost the bundle something."""
+def check_orthogonal(rotation, nact: int, tol: float = DEFAULT_TOL) -> np.ndarray:
+    """Return ``rotation`` as a float array, or raise :class:`RotationError`.
 
-
-# ------------------------------------------------------------- the matrix
-
-
-def check_orthogonal(
-    rotation, nact: int, *, tol: float = ORTHOGONALITY_TOL, diagnostic: bool = False
-) -> np.ndarray:
-    """Return ``rotation`` as a validated ``(nact, nact)`` float array.
-
-    Raises :class:`RotationError` unless ``U.T U = I`` to within ``tol``. A
-    non-orthogonal ``U`` changes the spectrum of the Hamiltonian instead of
-    re-expressing it, which is a different calculation wearing the same name;
-    ``diagnostic=True`` permits it explicitly, for the tests and experiments
-    that want to watch an invariant break.
+    Checked rather than assumed: a non-orthogonal ``U`` produces a Hamiltonian
+    with a different spectrum and no error anywhere, so every caller would
+    otherwise be one typo away from a plausible wrong answer.
     """
     matrix = np.asarray(rotation, dtype=np.float64)
+
     if matrix.ndim != 2 or matrix.shape != (nact, nact):
         raise RotationError(
-            f"rotation has shape {np.asarray(rotation).shape}, expected "
-            f"{(nact, nact)} for an active space of {nact} orbitals"
+            f"rotation has shape {matrix.shape}, expected ({nact}, {nact}): one "
+            f"row and column per active orbital"
         )
     if not np.all(np.isfinite(matrix)):
         raise RotationError("rotation holds non-finite values")
 
     deviation = float(np.max(np.abs(matrix.T @ matrix - np.eye(nact))))
-    if deviation <= tol:
-        return matrix
-    if diagnostic:
-        warnings.warn(
-            f"rotation is not orthogonal (max |U.T U - I| = {deviation:.3e} > "
-            f"{tol:.1e}) and was accepted in diagnostic mode. The Hamiltonian "
-            f"spectrum is not invariant under it.",
-            RotationWarning,
-            stacklevel=3,
+    if deviation > tol:
+        raise RotationError(
+            f"rotation is not orthogonal: max |U.T U - I| = {deviation:.3e}, "
+            f"above the tolerance {tol:.1e}.\n"
+            f"A non-orthogonal U changes the spectrum of the Hamiltonian "
+            f"instead of merely re-expressing it, and nothing downstream would "
+            f"report that. If this came from an eigendecomposition or a QR, "
+            f"re-orthonormalise it before rotating."
         )
-        return matrix
-    raise RotationError(
-        f"rotation is not orthogonal: max |U.T U - I| = {deviation:.3e} > "
-        f"{tol:.1e}.\n"
-        f"Only an orthogonal U re-expresses the active space rather than "
-        f"changing it; under anything else the Hamiltonian's eigenvalues move. "
-        f"Pass diagnostic=True if breaking that invariant is the point."
+    return matrix
+
+
+def reference_blocks(bundle: Bundle) -> tuple[tuple[int, int], ...]:
+    """The groups inside the window that the reference determinant distinguishes.
+
+    ``(doubly occupied, singly occupied, virtual)`` as half-open index ranges
+    into the active window. A rotation may mix orbitals freely within any one of
+    them and not at all between them. Empty groups are dropped, so a closed
+    shell gives two.
+    """
+    return tuple((lo, hi) for lo, hi, _ in named_reference_blocks(bundle))
+
+
+def named_reference_blocks(bundle: Bundle) -> tuple[tuple[int, int, str], ...]:
+    """:func:`reference_blocks`, with each range carrying its own name."""
+    edges = (0, bundle.nocc_active_beta, bundle.nocc_active_alpha, bundle.nact)
+    return tuple(
+        (lo, hi, name)
+        for lo, hi, name in zip(edges, edges[1:], GROUP_NAMES)
+        if hi > lo
     )
 
 
-def random_orthogonal(nact: int, seed=None) -> np.ndarray:
-    """A random real orthogonal ``(nact, nact)`` matrix, from a QR factorisation.
+def check_reference_preserving(
+    rotation: np.ndarray, blocks, tol: float = DEFAULT_TOL
+) -> None:
+    """Raise unless ``rotation`` is block diagonal over ``blocks``.
 
-    Deterministic for a given ``seed``, so a test that fails can be reproduced.
+    ``blocks`` may be the ``(lo, hi)`` ranges from :func:`reference_blocks` or
+    the ``(lo, hi, name)`` triples from :func:`named_reference_blocks`; the
+    named form makes for a better message and is what
+    :func:`rotate_active_space` passes.
+
+    The check is on the off-block elements rather than on what they do, because
+    the consequence -- a different reference determinant -- is not something the
+    caller can inspect afterwards.
     """
-    rng = np.random.default_rng(seed)
-    q, r = np.linalg.qr(rng.normal(size=(nact, nact)))
-    # Fix the sign convention of the QR so the result is drawn from O(n) evenly
-    # rather than favouring whatever LAPACK's Householder choices favour.
-    diagonal = np.diag(r)
-    return q * np.where(diagonal == 0.0, 1.0, np.sign(diagonal))
+    blocks = tuple(
+        block if len(block) == 3 else (block[0], block[1], "group")
+        for block in blocks
+    )
+
+    leak, where = 0.0, None
+    for lo, hi, _ in blocks:
+        outside = np.ones(rotation.shape[0], dtype=bool)
+        outside[lo:hi] = False
+        if not outside.any():
+            continue
+        block_leak = float(np.max(np.abs(rotation[outside, lo:hi])))
+        if block_leak > leak:
+            leak, where = block_leak, (lo, hi)
+
+    if leak > tol:
+        labelled = ", ".join(f"[{lo + 1}-{hi}] {name}" for lo, hi, name in blocks)
+        raise RotationError(
+            f"rotation mixes orbitals across the reference determinant's "
+            f"occupation groups: {leak:.3e} of block {where[0] + 1}-{where[1]} "
+            f"leaks outside it.\n"
+            f"Inside the window the groups are (1-based) {labelled}.\n"
+            f"Mixing across them does not re-express the reference "
+            f"determinant, it replaces it. The windowed algebra identifies the "
+            f"occupied active orbitals by index order, so E_ref and E_core stop "
+            f"meaning what they meant and the alpha/beta gate will reject the "
+            f"result.\n"
+            f"Use g16dump.rotate.random_block_rotation for a rotation that "
+            f"leaves every energy invariant, or pass "
+            f"allow_reference_change=True if a general change of basis really "
+            f"is what you want."
+        )
 
 
-# ---------------------------------------------------------- the transforms
+def transform_eri(eri_act: np.ndarray, rotation: np.ndarray) -> np.ndarray:
+    """The four-index transform of the active ERIs, ``(tu|vw)`` in chemist order.
 
-
-def transform_one_body(matrix, rotation) -> np.ndarray:
-    """``U.T h U``."""
-    u = np.asarray(rotation, dtype=np.float64)
-    return u.T @ np.asarray(matrix, dtype=np.float64) @ u
-
-
-def transform_eri(eri, rotation) -> np.ndarray:
-    """The four-index transform ``(tu|vw) = sum_pqrs U_pt U_qu U_rv U_sw (pq|rs)``.
-
-    One index at a time, ``O(n^5)`` rather than the ``O(n^8)`` of contracting
-    all four at once, which is the only reason this is usable past a handful of
-    orbitals.
+    Done as four successive two-index contractions rather than one einsum over
+    eight indices: the same answer at ``O(nact**5)`` instead of ``O(nact**8)``.
     """
-    u = np.asarray(rotation, dtype=np.float64)
-    out = np.asarray(eri, dtype=np.float64)
-    for _ in range(4):
-        # Contract the leading axis and let the result rotate into place, so
-        # after four passes the axes are back in their original order.
-        out = np.tensordot(out, u, axes=([0], [0]))
+    out = np.asarray(eri_act, dtype=np.float64)
+    for axis in range(4):
+        out = np.tensordot(out, rotation, axes=([axis], [0]))
+        out = np.moveaxis(out, -1, axis)
     return out
-
-
-# --------------------------------------------------- rotating a Hamiltonian
-
-
-def rotate_hamiltonian(
-    hamiltonian: ActiveHamiltonian,
-    rotation,
-    *,
-    tol: float = ORTHOGONALITY_TOL,
-    diagnostic: bool = False,
-) -> ActiveHamiltonian:
-    """Re-express ``hamiltonian`` in a rotated active-orbital basis.
-
-    Exact for any orthogonal ``U``: ``E_core`` is a property of the frozen core
-    and does not move, ``h'`` and the ERIs transform as tensors, and the
-    many-body spectrum is therefore unchanged.
-
-    ``e_act`` and ``e_ref`` are recomputed rather than carried over. They are
-    properties of the *reference determinant* --- the first ``nocc`` active
-    orbitals --- and a ``U`` that mixes occupied with virtual orbitals makes
-    that a different determinant with a genuinely different energy. Only
-    ``e_ref`` still equals the SCF energy when the occupied space survives the
-    rotation; :func:`preserves_occupied_space` is how to ask.
-    """
-    nact = int(hamiltonian.nact)
-    u = check_orthogonal(rotation, nact, tol=tol, diagnostic=diagnostic)
-
-    h_eff = transform_one_body(hamiltonian.h_eff, u)
-    eri = transform_eri(hamiltonian.eri_active, u)
-
-    nelec, ms2 = int(hamiltonian.nelec_active), int(hamiltonian.ms2)
-    nocc_alpha = (nelec + ms2) // 2
-    nocc_beta = nelec - nocc_alpha
-    e_act = active_energy(h_eff, eri, nocc_alpha, nocc_beta)
-
-    return replace(
-        hamiltonian,
-        h_eff=h_eff,
-        eri_active=eri,
-        e_act=e_act,
-        e_ref=hamiltonian.e_core + e_act,
-    )
-
-
-# -------------------------------------------------------- rotating a bundle
-
-
-def occupation_leakage(bundle: Bundle, rotation) -> float:
-    """``max |U[occupied, virtual]|`` over the active occupied blocks.
-
-    Zero when ``U`` is block diagonal between the orbitals the reference
-    determinant occupies and the ones it does not --- for either spin, since an
-    open-shell reference has two such partitions and both have to survive.
-    """
-    u = np.asarray(rotation, dtype=np.float64)
-    leakage = 0.0
-    for nocc in {bundle.nocc_active_alpha, bundle.nocc_active_beta}:
-        if 0 < nocc < u.shape[0]:
-            leakage = max(
-                leakage,
-                float(np.max(np.abs(u[:nocc, nocc:]))),
-                float(np.max(np.abs(u[nocc:, :nocc]))),
-            )
-    return leakage
-
-
-def preserves_occupied_space(
-    bundle: Bundle, rotation, *, tol: float = OCCUPATION_TOL
-) -> bool:
-    """Whether ``rotation`` leaves the reference determinant's occupied space alone."""
-    return occupation_leakage(bundle, rotation) <= tol
 
 
 def rotate_active_space(
     bundle: Bundle,
     rotation,
     *,
-    tol: float = ORTHOGONALITY_TOL,
-    occupation_tol: float = OCCUPATION_TOL,
-    diagnostic: bool = False,
+    tol: float = DEFAULT_TOL,
+    allow_reference_change: bool = False,
 ) -> Bundle:
     """Return a copy of ``bundle`` with its active space rotated by ``rotation``.
 
-    ``rotation`` is a real orthogonal ``(nact, nact)`` matrix; ``tol`` is the
-    tolerance on ``U.T U = I`` and ``diagnostic=True`` waives it. The orbitals
-    and the active ERIs move; the AO-basis Fock matrices, the overlap, the core
-    Hamiltonian, the nuclear repulsion and every electron count do not.
+    ``rotation`` is a real orthogonal ``(nact, nact)`` matrix. ``tol`` is the
+    tolerance on ``U.T U = I`` and on the off-block leakage.
 
-    Two things are deliberately not carried through:
+    By default the rotation must preserve the reference determinant's occupation
+    groups; see the module docstring for why, and
+    :func:`check_reference_preserving` for what is checked.
+    ``allow_reference_change=True`` lifts that and performs a general change of
+    active-orbital basis, which is a real operation but produces a bundle
+    ``active_hamiltonian`` will refuse.
 
-    ``orbital energies`` are dropped. Within a rotated window they are the
-    diagonal of nothing, and keeping them invites exactly the
-    ``diag(orbital_energies)`` mistake this package exists to correct.
-
-    ``Fock matrices`` are dropped, with a :class:`RotationWarning`, when the
-    rotation mixes the reference determinant's occupied orbitals with its
-    virtual ones --- see the module docstring. The returned bundle is valid and
-    can be rotated again, but it needs its Fock matrices rebuilt through
-    :func:`g16dump.hamiltonian.with_rebuilt_fock` before it can produce a
-    Hamiltonian.
+    The returned bundle is validated before it is handed back, so a rotation
+    that produced something the schema would reject fails here rather than at
+    the next ``load``.
     """
-    u = check_orthogonal(rotation, int(bundle.nact), tol=tol, diagnostic=diagnostic)
+    matrix = check_orthogonal(rotation, bundle.nact, tol)
+    if not allow_reference_change:
+        check_reference_preserving(matrix, named_reference_blocks(bundle), tol)
 
-    mo_coeff = np.array(bundle.C, dtype=np.float64, copy=True)
-    mo_coeff[:, bundle.active] = mo_coeff[:, bundle.active] @ u
+    mo_coeff = np.array(bundle.C, copy=True)
+    mo_coeff[:, bundle.active] = mo_coeff[:, bundle.active] @ matrix
 
     provenance = dict(bundle.provenance)
-    rotations = list(provenance.get("active_rotations", []))
-    rotations.append(
-        {
-            "nact": int(bundle.nact),
-            "window_1based": [int(bundle.active_first), int(bundle.active_last)],
-            "determinant": float(np.linalg.det(u)),
-            "orthogonality_deviation": float(
-                np.max(np.abs(u.T @ u - np.eye(u.shape[0])))
-            ),
-            "diagnostic": bool(diagnostic),
-        }
+    provenance["rotated"] = int(provenance.get("rotated", 0)) + 1
+    provenance["rotation_orthogonality"] = float(
+        np.max(np.abs(matrix.T @ matrix - np.eye(bundle.nact)))
     )
-    provenance["active_rotations"] = rotations
-    provenance["orbital_energies_dropped"] = (
-        "orbital energies are not defined in a rotated active space"
+    if allow_reference_change:
+        provenance["rotation_changed_reference"] = True
+
+    rotated = replace(
+        bundle,
+        C=mo_coeff,
+        eri_active=transform_eri(bundle.eri_active, matrix),
+        # The orbitals are no longer the ones these energies described, and a
+        # stale diagnostic is worse than an absent one.
+        orbital_energies=None,
+        orbital_energies_beta=None,
+        provenance=provenance,
     )
+    validate(rotated, source="rotated bundle")
+    return rotated
 
-    changes = {
-        "C": mo_coeff,
-        "eri_active": transform_eri(bundle.eri_active, u),
-        "orbital_energies": None,
-        "orbital_energies_beta": None,
-        "provenance": provenance,
-    }
 
-    leakage = occupation_leakage(bundle, u)
-    if leakage > occupation_tol:
-        rotations[-1]["occupation_leakage"] = leakage
-        reason = (
-            f"the rotation mixes the reference determinant's occupied and "
-            f"virtual active orbitals (max |U[occ, virt]| = {leakage:.3e}), so "
-            f"the stored Fock matrices no longer describe the determinant the "
-            f"orbital ordering implies"
-        )
-        provenance["fock_dropped_reason"] = reason
-        changes.update(
-            F_alpha_ao=None, F_beta_ao=None, fock_source="none"
-        )
-        warnings.warn(
-            f"{reason}. They have been dropped and fock_source set to 'none'; "
-            f"rebuild them from the rotated orbitals with "
-            f"g16dump.hamiltonian.with_rebuilt_fock before building a "
-            f"Hamiltonian. To rotate the Hamiltonian itself, which is exact for "
-            f"any orthogonal U and needs no Fock matrix, use "
-            f"g16dump.rotate.rotate_hamiltonian.",
-            RotationWarning,
-            stacklevel=2,
-        )
+def random_rotation(nact: int, seed: int) -> np.ndarray:
+    """A reproducible random orthogonal matrix, for tests and for probing.
 
-    return replace(bundle, **changes)
+    The sign fix on the ``R`` diagonal makes the QR decomposition unique, so the
+    same seed gives the same matrix on every platform and numpy version -- which
+    an invariance test that is supposed to be reproducible needs.
+    """
+    generator = np.random.default_rng(seed)
+    q, r = np.linalg.qr(generator.normal(size=(nact, nact)))
+    return q * np.sign(np.diag(r))
+
+
+def random_block_rotation(bundle: Bundle, seed: int) -> np.ndarray:
+    """A random rotation that leaves ``bundle``'s reference determinant alone.
+
+    Block diagonal over :func:`reference_blocks`, so it mixes orbitals only
+    within the doubly occupied, singly occupied and virtual groups. This is the
+    rotation an invariance test wants: it changes the orbitals completely and
+    every energy not at all.
+
+    A group of one orbital cannot be rotated, so it is left as it is rather than
+    multiplied by a random sign -- a sign flip is orthogonal and harmless, but
+    it makes "the orbitals moved" harder to assert honestly.
+    """
+    generator = np.random.default_rng(seed)
+    matrix = np.eye(bundle.nact)
+    for lo, hi in reference_blocks(bundle):
+        size = hi - lo
+        if size < 2:
+            continue
+        q, r = np.linalg.qr(generator.normal(size=(size, size)))
+        matrix[lo:hi, lo:hi] = q * np.sign(np.diag(r))
+    return matrix
 
 
 __all__ = [
-    "OCCUPATION_TOL",
-    "ORTHOGONALITY_TOL",
+    "DEFAULT_TOL",
     "RotationError",
-    "RotationWarning",
+    "GROUP_NAMES",
     "check_orthogonal",
-    "occupation_leakage",
-    "preserves_occupied_space",
-    "random_orthogonal",
+    "check_reference_preserving",
+    "random_block_rotation",
+    "random_rotation",
+    "named_reference_blocks",
+    "reference_blocks",
     "rotate_active_space",
-    "rotate_hamiltonian",
     "transform_eri",
-    "transform_one_body",
 ]

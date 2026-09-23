@@ -1,0 +1,15 @@
+%chk=probe_h2o_nowindow.chk
+%mem=2GB
+%nprocshared=1
+#P HF/STO-3G NoSymm Int=NoBasisTransform SCF=(Conver=10)
+# Output=(MatrixElement,MO2ElectronIntegrals) Tran=(Full,Force)
+
+probe_h2o_nowindow: the control. Identical to probe_h2o_rhf except that Window= is absent, so the transformation should cover all 7 MOs. This is the only way to prove Window= does anything: if this reports a 7^4 = 2401 two-electron block and probe_h2o_rhf reports 6^4 = 1296, the keyword works. If both come back the same size, Window= was silently ignored and the "never transform the full MO space" claim is false. Diff the two probe JSON reports; that comparison is this job's deliverable.
+
+0 1
+O   0.0000000   0.0000000   0.1173000
+H   0.0000000   0.7572000  -0.4692000
+H   0.0000000  -0.7572000  -0.4692000
+
+probe_h2o_nowindow.mat
+

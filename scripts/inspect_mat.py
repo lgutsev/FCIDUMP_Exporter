@@ -36,6 +36,11 @@ LABEL_PROBES = {
     "overlap": "AO overlap (used to pin down the C row/column convention)",
     "density": "SCF densities",
     "kinetic": "AO kinetic energy",
+    "trans mo coefficients": (
+        "the MO coefficients actually used in the transformation, with frozen "
+        "core and virtuals removed -- an unambiguous readout of the window "
+        "Gaussian applied (gauopen v2 only)"
+    ),
 }
 
 # Scalar names to try through me.scalar().  Unknown names are expected to fail;
@@ -53,7 +58,29 @@ SCALAR_PROBES = [
     "ENERGY",
     "EUHF",
     "ERHF",
+    "TE SCF ENERGY",
+    # QCMatEl checks this for 1.0 to confirm the job completed, so it turns
+    # "the .mat looks truncated" into a one-line diagnosis.
+    "JOB STATUS",
 ]
+
+#: Header fields that answer the route questions directly, with what each value
+#: means. ITran is the decisive one: it says whether the transformation ran at
+#: all, which no amount of label-hunting can tell you.
+HEADER_VERDICTS = {
+    "itran": {
+        0: "NO MO INTEGRALS WERE STORED. The route did not run a "
+           "transformation -- check Output=(MatrixElement,MO2ElectronIntegrals) "
+           "and Tran=(Full,Force) before reading anything else here.",
+        4: "PARTIAL transformation: only MOs involving at least one occupied "
+           "orbital. Not enough for a FCIDUMP; Tran=Full was not in effect.",
+        5: "FULL transformation. This is what the method needs.",
+    },
+    "icgu": {
+        "note": "three digits klm; m is 1 for RHF/GHF and 2 for UHF, so it is "
+                "the cleanest restricted/unrestricted discriminator",
+    },
+}
 
 
 _MISSING = object()
@@ -404,6 +431,45 @@ def main(argv=None) -> int:
     beta_mo = [k for k in keys if "beta" in k.lower() and "mo coefficients" in k.lower()]
     answers["beta_mo_coefficients"] = beta_mo
     print(f"\n  BETA MO COEFFICIENTS present: {bool(beta_mo)}  {beta_mo}")
+    print(
+        "    (a restricted job writes only ALPHA blocks, so a BETA block here "
+        "means the job was unrestricted -- UHF, which this project does not "
+        "accept)"
+    )
+
+    # ------------------------------------------------- did the transform run?
+    # Reported last, because it is the thing to read first: every other answer
+    # above is meaningless if no transformation happened.
+    print("\n" + "-" * 78)
+    itran = _safe_getattr(me, "itran")
+    answers["itran"] = None if itran is _MISSING else itran
+    if itran is _MISSING:
+        print("  ITran: not exposed by this gauopen build")
+    else:
+        verdict = HEADER_VERDICTS["itran"].get(
+            int(itran), f"unrecognised value {itran}"
+        )
+        print(f"  ITran = {itran}: {verdict}")
+
+    for name in ("nfc", "nfv", "nbasis", "nbsuse", "ne", "multip", "icharg", "icgu"):
+        value = _safe_getattr(me, name)
+        answers[name] = None if value is _MISSING else value
+        if value is not _MISSING:
+            print(f"  {name:8s} = {value}")
+    print(f"  (icgu: {HEADER_VERDICTS['icgu']['note']})")
+
+    nfc, nfv = answers.get("nfc"), answers.get("nfv")
+    nbsuse = answers.get("nbsuse")
+    if None not in (nfc, nfv, nbsuse):
+        nact = int(nbsuse) - int(nfc) - int(nfv)
+        print(
+            f"\n  => the window Gaussian applied is {int(nfc) + 1}-"
+            f"{int(nbsuse) - int(nfv)} (1-based), {nact} active orbitals, so a "
+            f"full two-electron block should expand to {nact}**4 = {nact ** 4} "
+            f"elements. Check that against the packing candidates above: if it "
+            f"instead matches nbsuse**4, Window= was ignored."
+        )
+        answers["nact_from_header"] = nact
 
     report["answers"] = answers
     print(

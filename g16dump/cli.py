@@ -279,39 +279,93 @@ def _add_dump(subparsers) -> None:
         "--threshold",
         type=float,
         default=0.0,
-        help="omit two-electron integrals smaller than this in magnitude",
+        help=(
+            "omit two-electron integrals smaller than this in magnitude. The "
+            "default of 0 writes every symmetry-unique integral; anything else "
+            "makes the file stop reproducing the reference energy exactly"
+        ),
     )
     parser.add_argument(
         "--isym", type=int, default=1, help="ISYM for the FCIDUMP namelist"
+    )
+    parser.add_argument(
+        "--orbsym",
+        help=(
+            "comma-separated irrep labels, one per active orbital (1-8). "
+            "Defaults to C1, i.e. all ones"
+        ),
+    )
+    parser.add_argument(
+        "--precision",
+        type=int,
+        default=None,
+        help=(
+            "digits after the decimal point in each integral. The default, 16, "
+            "is the smallest that reproduces a double exactly"
+        ),
+    )
+    parser.add_argument(
+        "--dice-nocc",
+        action="store_true",
+        help="also print Dice's nocc block for the reference determinant",
     )
     parser.set_defaults(func=_run_dump)
 
 
 def _run_dump(args) -> int:
-    from .write import WriteError, provenance_path_for, write_fcidump
+    from .write import WriteError, dice_occupation_line, provenance_path, write_fcidump
+
+    options = {}
+    if args.precision is not None:
+        options["precision"] = args.precision
+    if args.orbsym:
+        try:
+            options["orbsym"] = [int(x) for x in args.orbsym.replace(",", " ").split()]
+        except ValueError:
+            print(
+                f"error: --orbsym must be integers, got {args.orbsym!r}",
+                file=sys.stderr,
+            )
+            return 1
 
     try:
         bundle = load(args.bundle)
         hamiltonian = active_hamiltonian(bundle)
-        path = write_fcidump(
+        out = write_fcidump(
             hamiltonian,
             args.out,
             isym=args.isym,
             threshold=args.threshold,
             provenance=bundle.provenance,
+            **options,
         )
     except (BundleError, HamiltonianError, WriteError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
+    except OSError as exc:
+        print(f"error: cannot write {args.out}: {exc}", file=sys.stderr)
+        return 1
 
-    print(f"wrote {path}")
+    print(f"wrote {out}")
+    # Only claim the sidecar when one was actually written: write_fcidump skips
+    # it for an empty provenance, and a bundle can carry one.
+    sidecar = provenance_path(out)
+    if sidecar.exists():
+        print(f"wrote {sidecar}")
     print(
-        f"  {hamiltonian.nact} orbitals, {hamiltonian.nelec_active} electrons, "
-        f"MS2 {hamiltonian.ms2}\n"
-        f"  E_core {hamiltonian.e_core:.10f} Ha, E_ref {hamiltonian.e_ref:.10f} Ha "
-        f"({hamiltonian.fock_source} Fock)"
+        f"  NORB   {hamiltonian.nact}\n"
+        f"  NELEC  {hamiltonian.nelec_active}\n"
+        f"  MS2    {hamiltonian.ms2}\n"
+        f"  E_core {hamiltonian.e_core:.10f} Ha\n"
+        f"  E_ref  {hamiltonian.e_ref:.10f} Ha"
     )
-    print(f"wrote {provenance_path_for(path)}")
+    if args.threshold > 0:
+        print(
+            f"\nnote: integrals below {args.threshold:g} were omitted, so this "
+            f"file no longer reproduces E_ref exactly."
+        )
+    if args.dice_nocc:
+        print(f"\nDice nocc block:\n{dice_occupation_line(hamiltonian)}", end="")
     return 0
 
 
@@ -321,43 +375,35 @@ def _run_dump(args) -> int:
 def _add_rotate(subparsers) -> None:
     parser = subparsers.add_parser(
         "rotate",
-        help="rotate a bundle's active space by a real orthogonal matrix",
+        help="rotate a bundle's active space",
         description=(
-            "Apply a real orthogonal transformation entirely within the active\n"
-            "space and write the rotated bundle. The many-body spectrum is\n"
-            "invariant under this, which makes it a correctness test as much as\n"
-            "a feature.\n"
-            "\n"
-            "Rotation is not uniformly safe on a bundle, and two things are\n"
-            "deliberately not carried through. Orbital energies are dropped by\n"
-            "every rotation: inside a rotated window they are the diagonal of\n"
-            "nothing, and keeping them invites the very diag(orbital_energies)\n"
-            "mistake this package exists to correct. The stored Fock matrices\n"
-            "are dropped as well whenever the rotation mixes the reference\n"
-            "determinant's active occupied orbitals with its active virtual\n"
-            "ones, because they then no longer describe the determinant the\n"
-            "orbital ordering implies. Such a bundle comes back with\n"
-            "fock_source 'none' and must have its Fock matrices rebuilt through\n"
-            "PySCF before it can produce a Hamiltonian; g16dump says so when it\n"
-            "happens, and building a Hamiltonian from it is refused rather than\n"
-            "quietly returning a plausible wrong h'."
+            "Rotate the active orbitals among themselves. Every energy is "
+            "invariant under such a rotation, which makes it a test of the "
+            "pipeline: rotate, dump, and confirm the answer did not move."
         ),
-        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("bundle", help="the .npz bundle")
-    parser.add_argument(
-        "--rotation",
-        required=True,
-        help="a .npy file holding the real orthogonal (nact, nact) matrix",
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument(
+        "--rotation", help="a .npy file holding the (nact, nact) orthogonal matrix"
+    )
+    group.add_argument(
+        "--random",
+        type=int,
+        metavar="SEED",
+        help=(
+            "generate a reproducible random rotation that preserves the "
+            "reference determinant's occupation groups"
+        ),
     )
     parser.add_argument("--out", required=True, help="path for the rotated bundle")
     parser.add_argument(
-        "--diagnostic",
+        "--allow-reference-change",
         action="store_true",
         help=(
-            "accept a matrix that is not orthogonal. The Hamiltonian's spectrum "
-            "is not invariant under one, so this is for experiments that mean to "
-            "break that invariant and nothing else."
+            "permit a rotation that mixes occupied with virtual active "
+            "orbitals. This replaces the reference determinant rather than "
+            "re-expressing it, and the result will not build a Hamiltonian"
         ),
     )
     parser.set_defaults(func=_run_rotate)
@@ -366,29 +412,39 @@ def _add_rotate(subparsers) -> None:
 def _run_rotate(args) -> int:
     import numpy as np
 
-    from .rotate import rotate_active_space
+    from .rotate import (
+        RotationError,
+        random_block_rotation,
+        reference_blocks,
+        rotate_active_space,
+    )
 
     try:
         bundle = load(args.bundle)
-        rotation = np.load(args.rotation)
-    except BundleError as exc:
-        print(f"error: {exc}", file=sys.stderr)
-        return 1
-    except OSError as exc:
-        print(f"error: cannot read the rotation matrix: {exc}", file=sys.stderr)
-        return 1
-
-    try:
-        rotated = rotate_active_space(bundle, rotation, diagnostic=args.diagnostic)
+        if args.random is not None:
+            rotation = random_block_rotation(bundle, args.random)
+        else:
+            rotation = np.load(args.rotation)
+        rotated = rotate_active_space(
+            bundle, rotation, allow_reference_change=args.allow_reference_change
+        )
         out = save(rotated, args.out)
-    except (BundleError, ValueError) as exc:
+    except (BundleError, RotationError, OSError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
+    groups = ", ".join(f"{lo + 1}-{hi}" for lo, hi in reference_blocks(bundle))
     print(f"wrote {out}")
-    print(rotated.describe())
-    if rotated.fock_source == "none" and bundle.fock_source != "none":
-        print(f"\nnote: {rotated.provenance['fock_dropped_reason']}.")
+    print(
+        f"  rotated {bundle.nact} active orbitals "
+        f"(occupation groups {groups}, 1-based within the window)\n"
+        f"  rotations applied so far: {rotated.provenance['rotated']}"
+    )
+    if args.allow_reference_change:
+        print(
+            "\nnote: this rotation was allowed to change the reference "
+            "determinant, so g16dump dump will refuse the result."
+        )
     return 0
 
 

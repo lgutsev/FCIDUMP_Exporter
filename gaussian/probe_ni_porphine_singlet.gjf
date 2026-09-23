@@ -1,0 +1,49 @@
+%chk=probe_ni_porphine_singlet.chk
+%mem=16GB
+%nprocshared=8
+#P HF/6-31G NoSymm Int=NoBasisTransform SCF=(Conver=10,MaxCycle=256)
+# Output=(MatrixElement,MO2ElectronIntegrals) Tran=(Full,Force) Window=(84,104)
+
+probe_ni_porphine_singlet: Ni(II) porphine, 37 atoms, ~260 basis functions. THE SCALE TEST, and the first job here that resembles the systems this project exists for. The window is CAS(22,21) -- the same active space as the legacy Fe-porphyrin dumps in legacy/ -- so 83 orbitals are frozen core and ~156 are frozen virtual. A full transformation over ~260 orbitals is ~5e8 unique integrals; the windowed one is ~24000. If this job completes in minutes rather than days, that difference is the whole claim of the method, demonstrated rather than asserted. Note the window indices depend only on the electron count (188, so 94 occupied), not on the basis, so they stay correct if you change the basis set. Expect NFC=83, NFV=NBsUse-104, nact=21, NELEC=22, MS2=0.
+
+0 1
+Ni     0.00000000     0.00000000     0.00000000
+N      1.95000000     0.00000000     0.00000000
+C      2.78470041     1.09768676     0.00000000
+C      2.78470041    -1.09768676     0.00000000
+C      4.15812857     0.67500000     0.00000000
+C      4.15812857    -0.67500000     0.00000000
+H      5.02688948     1.31660305     0.00000000
+H      5.02688948    -1.31660305     0.00000000
+C      2.43600743     2.43600743     0.00000000
+H      3.19968275     3.19968275     0.00000000
+N     -0.00000000     1.95000000     0.00000000
+C     -1.09768676     2.78470041     0.00000000
+C      1.09768676     2.78470041     0.00000000
+C     -0.67500000     4.15812857     0.00000000
+C      0.67500000     4.15812857     0.00000000
+H     -1.31660305     5.02688948     0.00000000
+H      1.31660305     5.02688948     0.00000000
+C     -2.43600743     2.43600743     0.00000000
+H     -3.19968275     3.19968275     0.00000000
+N     -1.95000000    -0.00000000     0.00000000
+C     -2.78470041    -1.09768676     0.00000000
+C     -2.78470041     1.09768676     0.00000000
+C     -4.15812857    -0.67500000     0.00000000
+C     -4.15812857     0.67500000     0.00000000
+H     -5.02688948    -1.31660305     0.00000000
+H     -5.02688948     1.31660305     0.00000000
+C     -2.43600743    -2.43600743     0.00000000
+H     -3.19968275    -3.19968275     0.00000000
+N      0.00000000    -1.95000000     0.00000000
+C      1.09768676    -2.78470041     0.00000000
+C     -1.09768676    -2.78470041     0.00000000
+C      0.67500000    -4.15812857     0.00000000
+C     -0.67500000    -4.15812857     0.00000000
+H      1.31660305    -5.02688948     0.00000000
+H     -1.31660305    -5.02688948     0.00000000
+C      2.43600743    -2.43600743     0.00000000
+H      3.19968275    -3.19968275     0.00000000
+
+probe_ni_porphine_singlet.mat
+
