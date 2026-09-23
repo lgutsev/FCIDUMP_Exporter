@@ -33,6 +33,8 @@ JOBS=(
   probe_nh_rohf              # a second open shell, degenerate pi pair
   probe_h2o_frozen_virtual   # the only job with frozen virtuals
   probe_h2o_rks              # is a Kohn-Sham matrix written as a Fock matrix
+  probe_ch2_rohf_ccpvdz      # MOKIT gate: pure d functions, ROHF
+  probe_h2o_rks_631gs        # MOKIT gate: Cartesian d and SP shells, KS
 )
 
 # Tier 2: the real thing. 37 atoms, ~260 basis functions, minutes-to-hours
@@ -70,6 +72,8 @@ for name in "${JOBS[@]}"; do
   if [ -f "${name}.chk" ]; then
     formchk "${name}.chk" "${name}.fch" > /dev/null 2>&1 \
       && echo "  formchk ok" || echo "  formchk FAILED"
+    # The .fch is small and is half of every rebuilt-Fock test; ship it.
+    cp -f "${name}.fch" "${OUT}/" 2>/dev/null
   fi
 
   if [ -f "${name}.mat" ]; then

@@ -26,7 +26,8 @@ windowed route is that it reaches that answer from the active ERIs and the Fock
 matrices alone, never touching a core-active integral.
 
 Nothing in this module reads a file or imports pyscf, except
-:func:`rebuild_fock` and the ``.fch`` helper beside it, which import lazily.
+:func:`rebuild_fock` and :func:`with_rebuilt_fock`, which import it lazily.
+Reading a ``.fch`` is :mod:`g16dump.fch`'s job.
 """
 
 from __future__ import annotations
@@ -292,6 +293,14 @@ def active_hamiltonian(
 
 # ------------------------------------------------------- rebuilt-Fock path
 
+#: ``max |X.T S_mol X - S_bundle|`` above which a ``Mole`` is refused as not
+#: describing the bundle's AO basis. See :func:`with_rebuilt_fock`.
+AO_OVERLAP_TOL = 1e-6
+
+
+class AOBasisMismatchError(HamiltonianError):
+    """The PySCF ``Mole`` and the bundle do not share an AO basis."""
+
 
 def densities(mo_coeff: np.ndarray, nalpha: int, nbeta: int) -> tuple[np.ndarray, ...]:
     """``P^sigma = C_occ C_occ.T`` from the orbitals and their occupations."""
@@ -300,12 +309,30 @@ def densities(mo_coeff: np.ndarray, nalpha: int, nbeta: int) -> tuple[np.ndarray
     return occ_a @ occ_a.T, occ_b @ occ_b.T
 
 
+def _identity_or(ao_transform, nao_mol: int, nao_bundle: int) -> np.ndarray:
+    if ao_transform is None:
+        if nao_mol != nao_bundle:
+            raise AOBasisMismatchError(
+                f"the Mole has {nao_mol} basis functions and the orbitals are "
+                f"expressed in {nao_bundle}; they are not the same AO basis."
+            )
+        return np.eye(nao_bundle)
+    transform = np.asarray(ao_transform, dtype=np.float64)
+    if transform.shape != (nao_mol, nao_bundle):
+        raise AOBasisMismatchError(
+            f"ao_transform has shape {transform.shape}, expected "
+            f"({nao_mol}, {nao_bundle}): (Mole AOs, bundle AOs)."
+        )
+    return transform
+
+
 def rebuild_fock(
     mol,
     mo_coeff: np.ndarray,
     nalpha: int,
     nbeta: int,
     hcore_ao: np.ndarray | None = None,
+    ao_transform: np.ndarray | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Build ``F^sigma = Hcore + J[Pa+Pb] - K[Psigma]`` through PySCF.
 
@@ -313,8 +340,15 @@ def rebuild_fock(
     job needs whenever Gaussian stored its Roothaan effective operator instead
     of the two spin Fock matrices. One JK build, far cheaper than an ``ao2mo``.
 
-    ``mol`` is a PySCF ``Mole``; :func:`mol_from_fch` builds one from the
-    Gaussian formatted checkpoint that goes with the ``.mat``.
+    ``mo_coeff`` and ``hcore_ao`` are in the caller's AO basis. When that is not
+    the ``Mole``'s -- a Gaussian bundle and a ``Mole`` from MOKIT never share one
+    -- ``ao_transform`` is the map ``X`` with ``C_mol = X @ mo_coeff``. The
+    densities are then built in the ``Mole``'s basis, where PySCF's JK build
+    needs them, and the result is returned in the caller's basis::
+
+        F^sigma = Hcore + X.T (J - K^sigma)[X C] X
+
+    Nothing checks here that ``X`` is right; :func:`with_rebuilt_fock` does.
     """
     try:
         from pyscf import scf
@@ -324,33 +358,87 @@ def rebuild_fock(
             "Install it with: pip install 'g16dump[validate]'"
         ) from exc
 
-    dm_a, dm_b = densities(np.asarray(mo_coeff), nalpha, nbeta)
+    mo_coeff = np.asarray(mo_coeff, dtype=np.float64)
+    transform = _identity_or(ao_transform, mol.nao, mo_coeff.shape[0])
+    dm_a, dm_b = densities(transform @ mo_coeff, nalpha, nbeta)
     if hcore_ao is None:
-        hcore_ao = mol.intor("int1e_kin") + mol.intor("int1e_nuc")
+        hcore_ao = transform.T @ scf.hf.get_hcore(mol) @ transform
 
     j_matrices, k_matrices = scf.hf.get_jk(mol, [dm_a, dm_b], hermi=1)
     coulomb = j_matrices[0] + j_matrices[1]
 
-    fock_a = hcore_ao + coulomb - k_matrices[0]
-    fock_b = hcore_ao + coulomb - k_matrices[1]
+    fock_a = hcore_ao + transform.T @ (coulomb - k_matrices[0]) @ transform
+    fock_b = hcore_ao + transform.T @ (coulomb - k_matrices[1]) @ transform
     return fock_a, fock_b
 
 
-def with_rebuilt_fock(bundle: Bundle, mol) -> Bundle:
+def overlap_mismatch(bundle: Bundle, mol, ao_transform=None) -> float:
+    """``max |X.T S_mol X - S_bundle|``: whether ``mol`` is the bundle's AO basis."""
+    transform = _identity_or(ao_transform, mol.nao, bundle.nao)
+    overlap = transform.T @ np.asarray(mol.intor("int1e_ovlp")) @ transform
+    return float(np.max(np.abs(overlap - bundle.S)))
+
+
+def with_rebuilt_fock(
+    bundle: Bundle,
+    mol,
+    *,
+    ao_transform: np.ndarray | None = None,
+    conversion: dict | None = None,
+    overlap_tol: float = AO_OVERLAP_TOL,
+) -> Bundle:
     """A copy of ``bundle`` carrying HF Fock matrices rebuilt from its orbitals.
 
+    ``mol`` must describe the bundle's AO basis, directly or through
+    ``ao_transform`` (see :func:`rebuild_fock`). That is checked, not assumed:
+    the ``Mole``'s overlap, carried into the bundle's basis, must reproduce the
+    bundle's own. A Gaussian bundle handed a ``Mole`` from MOKIT without the
+    transformation fails this -- Gaussian and PySCF order and normalize their
+    AOs differently -- and building densities in the wrong basis would give a
+    plausible, wrong Fock matrix. Use :func:`g16dump.fch.with_rebuilt_fock_from_fch`
+    for that case; it takes the transformation from MOKIT.
+
     The returned bundle records ``fock_source="pyscf_rebuilt"`` in both the
-    field and the provenance, so a downstream FCIDUMP can say where its
-    Hamiltonian came from.
+    field and the provenance, together with how the AO bases were matched, so a
+    downstream FCIDUMP can say where its Hamiltonian came from.
     """
     from dataclasses import replace
 
+    deviation = overlap_mismatch(bundle, mol, ao_transform)
+    if deviation > overlap_tol:
+        raise AOBasisMismatchError(
+            f"the PySCF Mole does not describe this bundle's AO basis: its "
+            f"overlap differs from the bundle's by {deviation:.3e} (tolerance "
+            f"{overlap_tol:.0e}).\n"
+            f"For a Gaussian bundle and a Mole from MOKIT's load_mol_from_fch this "
+            f"is expected: the two programs order (and, for Cartesian shells, "
+            f"normalize) their basis functions differently, so the .mat orbitals "
+            f"cannot be used in the Mole as they stand. Rebuild with "
+            f"g16dump.fch.with_rebuilt_fock_from_fch, or 'g16dump rebuild-fock', "
+            f"which apply MOKIT's Gaussian->PySCF transfer."
+        )
+
     fock_a, fock_b = rebuild_fock(
-        mol, bundle.C, bundle.nalpha, bundle.nbeta, bundle.Hcore_ao
+        mol, bundle.C, bundle.nalpha, bundle.nbeta, bundle.Hcore_ao,
+        ao_transform=ao_transform,
     )
+
+    import pyscf
+
+    if conversion is None:
+        conversion = {
+            "method": "none: the Mole's AO basis is the bundle's own",
+            "pyscf_version": str(pyscf.__version__),
+            "checks": {"overlap_after": deviation},
+        }
     provenance = dict(bundle.provenance)
     provenance["fock_source"] = "pyscf_rebuilt"
     provenance["fock_rebuilt_by"] = "pyscf"
+    provenance["fock_rebuild"] = {
+        "formula": "F^sigma = Hcore + J[Pa+Pb] - K[Psigma], one JK build",
+        "replaced_fock_source": bundle.fock_source,
+        "ao_conversion": conversion,
+    }
     return replace(
         bundle,
         F_alpha_ao=fock_a,
@@ -363,24 +451,17 @@ def with_rebuilt_fock(bundle: Bundle, mol) -> Bundle:
 def mol_from_fch(path):
     """Load a PySCF ``Mole`` from a Gaussian formatted checkpoint, through MOKIT.
 
-    MOKIT is not on PyPI; it is installed alongside Gaussian workflows. Its
-    absence is reported here rather than as a traceback from an import three
-    frames down.
+    Kept for compatibility; see :func:`g16dump.fch.mol_from_fch`. The ``Mole``
+    is in PySCF's AO basis, never the ``.mat``'s.
     """
-    try:
-        from mokit.lib.gaussian import load_mol_from_fch
-    except ImportError as exc:  # pragma: no cover - environment-dependent
-        raise HamiltonianError(
-            f"reading {path} needs MOKIT (mokit.lib.gaussian.load_mol_from_fch), "
-            f"which is not importable. MOKIT is not on PyPI; see "
-            f"https://gitlab.com/jxzou/mokit for installation. Alternatively, "
-            f"build the pyscf Mole yourself and pass it to "
-            f"g16dump.hamiltonian.with_rebuilt_fock."
-        ) from exc
-    return load_mol_from_fch(str(path))
+    from .fch import mol_from_fch as _mol_from_fch
+
+    return _mol_from_fch(path)
 
 
 __all__ = [
+    "AOBasisMismatchError",
+    "AO_OVERLAP_TOL",
     "ActiveHamiltonian",
     "HamiltonianError",
     "SpinConsistencyError",
@@ -391,6 +472,7 @@ __all__ = [
     "effective_one_electron",
     "mo_fock_matrices",
     "mol_from_fch",
+    "overlap_mismatch",
     "rebuild_fock",
     "reference_energy",
     "to_mo",
