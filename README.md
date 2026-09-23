@@ -231,21 +231,45 @@ $`\mathrm{diag}(\varepsilon)`$ there. The two agree only when the orbitals
 are canonical RHF. This equivalence is asserted numerically by the full-space
 and legacy-regression tests, not just claimed here.
 
-### Rebuilt-Fock fallback
+### Rebuilt-Fock path
 
-Required when the `.mat` carries no usable HF-type Fock matrix, and **always**
-required for KS orbitals:
+The normal route for KS orbitals, and the fallback for ROHF when the `.mat`
+carries Gaussian's Roothaan effective operator or no usable spin Fock matrices:
 
 1. Load the molecule from the matching `.fch` with MOKIT's `load_mol_from_fch`.
-2. Build $`P^{\alpha}`$, $`P^{\beta}`$ from the Gaussian orbitals and occupations.
-3. One PySCF JK build:
-   $`F^{\sigma} = H + J[P^{\alpha} + P^{\beta}] - K[P^{\sigma}]`$.
-   One Fock build, far cheaper than an `ao2mo`.
-4. Feed the result into the same functions as above.
+2. Carry the `.mat` orbitals into PySCF's AO basis with MOKIT's Gaussian→PySCF
+   transfer: $`C_{\mathrm{PySCF}} = X C_{\mathrm{Gaussian}}`$.
+3. Build $`P^{\alpha}`$, $`P^{\beta}`$ from those orbitals and their occupations.
+4. One PySCF JK build:
+   $`F^{\sigma} = H + X^{\mathsf T} (J[P^{\alpha} + P^{\beta}] - K[P^{\sigma}]) X`$,
+   stored in the bundle's own (Gaussian) AO basis. Far cheaper than an `ao2mo`.
+5. Feed the result into the same functions as above.
 
-Step 1 is the only part that needs MOKIT, and it is separable:
-`hamiltonian.with_rebuilt_fock(bundle, mol)` takes any PySCF `Mole`, so the path
-can be exercised, and a molecule supplied, without MOKIT present.
+**Why MOKIT, and why step 2 is not optional.** MOKIT is the Gaussian↔PySCF
+compatibility layer. It plays no part in the frozen-core algebra. Gaussian and
+PySCF hold the same basis functions but not in the same order: PySCF sorts
+each atom's shells by angular momentum and splits Pople SP shells, orders pure
+functions m = −l…+l where Gaussian uses 0, +1, −1, …, and orders Cartesian
+components differently and normalizes them differently. So even plain 6-31G is
+reordered, and the raw `.mat` coefficients are not orthonormal in the `Mole`'s
+overlap. On real Gaussian `.fch` files (O2/cc-pVTZ, H2O/cc-pVDZ, H2O/3-21G)
+the error is 2 to 190 before the transfer and about 1e-8 after it. g16dump
+does not re-derive the conventions. It reads MOKIT's transformation `X` out of
+`fch2py` and applies it to the full-precision `.mat` coefficients.
+
+The transfer is checked every time it is used, on quantities both programs
+compute independently. The `.mat` overlap and core Hamiltonian must equal
+PySCF's after the transformation, element by element. The converted orbitals
+must be orthonormal in PySCF's overlap and must match MOKIT's own transfer of
+the `.fch` orbitals. Any failure stops the run and names the check. A
+`.fch` from another job, basis or geometry fails here instead of producing a
+Hamiltonian.
+
+`hamiltonian.with_rebuilt_fock(bundle, mol)` still takes any PySCF `Mole`, and
+now refuses one whose overlap is not the bundle's. That is exactly what
+happens if a MOKIT `Mole` meets Gaussian-ordered orbitals without the
+transform, and before this check the result was a plausible, wrong Fock
+matrix.
 
 `pyscf` and `mokit` become runtime dependencies for this mode only. They are
 imported lazily, and their absence is reported as a clear error rather than a
@@ -323,6 +347,29 @@ g16dump validate JOB.npz --hamiltonian     # builds h', checks E_ref against E_s
 g16dump dump JOB.npz --out FCIDUMP --dice-nocc
 g16dump rotate JOB.npz --random 1 --out rotated.npz
 ```
+
+That is the whole route when Gaussian's stored Fock matrices pass the α/β
+check. `extract --fch` only records the `.fch` in provenance and rebuilds
+nothing. For KS orbitals, or when `validate --hamiltonian` rejects the stored
+ROHF matrices, rebuild them in a separate step:
+
+```bash
+g16dump extract JOB.mat --reference ROHF --fch JOB.fch --window 6 40 --out JOB.npz
+g16dump rebuild-fock JOB.npz --fch JOB.fch --out JOB_rebuilt.npz
+g16dump validate JOB_rebuilt.npz --hamiltonian
+g16dump dump JOB_rebuilt.npz --out FCIDUMP
+```
+
+`rebuild-fock` needs PySCF and MOKIT. It prints each check from the section
+above with its before and after values, then the α/β agreement and `E_ref` of
+the rebuilt bundle. For a Hartree–Fock job it writes nothing unless `E_ref`
+reproduces the job's SCF energy. It never writes over its input and does not
+replace an existing `--out` without `--force`. The new bundle records
+`fock_source = "pyscf_rebuilt"`. Under `fock_rebuild` in its provenance it
+records the MOKIT and PySCF versions, the kind of AO map (a permutation, or
+also a per-function rescaling for Cartesian shells), every check value, the
+`.fch` path and its SHA-256, and the input bundle. That record is carried into
+`FCIDUMP.provenance.json`.
 
 `--reference` is required and is never inferred. `--window` may be omitted, in
 which case the partition the `.mat` reports is used; either way it is
@@ -409,7 +456,10 @@ looks exactly like one that has converged.
 **For Kohn–Sham orbitals the stored KS matrix contains exchange–correlation and
 must never be used as $`f^{\sigma}`$.** The active-space Hamiltonian is always the *HF*
 Hamiltonian evaluated in the KS orbitals. A KS bundle fed to the stored-Fock
-path raises; use the rebuilt-Fock path. This warning is repeated in the CLI.
+path raises; use the rebuilt-Fock path (`g16dump rebuild-fock`). This warning is
+repeated in the CLI. For a KS bundle `validate --hamiltonian` prints the job's
+DFT energy but does not compare `E_ref` with it, because they are different
+quantities.
 
 ## Not in v1
 
@@ -436,9 +486,10 @@ path raises; use the rebuilt-Fock path. This warning is repeated in the CLI.
 g16dump/      matfile.py   .mat -> .npz bundle (the only module importing QCMatEl)
               bundle.py    load/validate the .npz bundle, shape assertions
               hamiltonian.py   h', E_core, E_ref from Fock matrices
+              fch.py       the .fch through MOKIT: Gaussian -> PySCF AO transfer
               rotate.py    rotations inside the active space
               write.py     FCIDUMP writer, symmetry-unique and vectorized
-              cli.py       extract / dump / validate / rotate
+              cli.py       inspect / extract / rebuild-fock / validate / dump / rotate
 gaussian/     route templates + how to run them
 legacy/       the original scripts, untouched, for reference and regression
 scripts/      inspect_mat.py, the matrix-element probe
@@ -474,8 +525,17 @@ python3 -c "import QCMatEl; print(QCMatEl.__file__)"
 
 Only `g16dump extract` (i.e. `matfile.py`) needs it.
 
-`mokit` comes from conda-forge or a source build, and only the rebuilt-Fock
-comparison path uses it. Nothing in CI does: CI runs the Gaussian-independent
+`mokit` comes from its conda channel or a source build, and only
+`g16dump rebuild-fock` (the rebuilt-Fock path from a `.fch`) uses it:
+
+```bash
+conda install mokit -c mokit/label/cf -c conda-forge   # MOKIT 1.2.9rc1 was tested
+```
+
+Both the Python package and MOKIT's command-line tools (`bas_fch2py` in
+particular) must be available. The tests that need it carry
+`@pytest.mark.mokit`. On a machine that has it, run them with
+`pytest -m mokit`. Nothing in CI does: CI runs the Gaussian-independent
 suite on Python 3.9 through 3.13 with numpy alone, and the PySCF oracles
 separately. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for how to mark a test that
 needs any of these.
@@ -492,9 +552,15 @@ needs any of these.
 | M5 | benchmarks | preserved on `claude/benchmarks-and-sweeps`, deliberately not a release blocker |
 | M6 | packaging, CI, DOI | CI, packaging, LICENSE and usage examples done; `CITATION.cff` awaits attribution, DOI still open |
 
-What M0 still gates is `extract` alone. Everything downstream of the bundle is
+What M0 still gates is `extract`, and the Gaussian → MOKIT → PySCF route on
+real output. The rebuilt-Fock conversion is tested here with MOKIT 1.2.9rc1 on
+Gaussian-convention data generated from PySCF (pure and Cartesian d and f, SP
+shells, RHF, ROHF and KS), and its conventions were checked against real
+Gaussian `.fch` files, but no real `.mat`/`.fch` pair has been through it yet;
+`tests/test_gaussian_outputs.py` is that gate, run as described in
+[`gaussian/README.md`](gaussian/README.md). Everything downstream of the bundle is
 exercised by the committed fixtures, so the labels in `g16dump.matfile.LABELS`
-are the only thing waiting on a real `.mat`. Twelve probe jobs and a runner
+are the only thing waiting on a real `.mat`. Fourteen probe jobs and a runner
 that executes them in one command are in [`gaussian/`](gaussian/), with the
 procedure for reading their result in
 [`gaussian/README.md`](gaussian/README.md); both of the likely outcomes -- real

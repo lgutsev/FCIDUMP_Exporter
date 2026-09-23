@@ -1,4 +1,4 @@
-"""``g16dump`` command line: inspect, extract, validate, dump, rotate.
+"""``g16dump`` command line: inspect, extract, rebuild-fock, validate, dump, rotate.
 
 No path in this module is hardcoded; everything comes from arguments. Each
 subcommand prints what it did and what the result contains, because the usual
@@ -118,7 +118,14 @@ def _add_extract(subparsers) -> None:
         description="Read a Gaussian 16 matrix-element file into an .npz bundle.",
     )
     parser.add_argument("matfile", help="the Gaussian .mat file")
-    parser.add_argument("--fch", help="the matching formatted checkpoint file")
+    parser.add_argument(
+        "--fch",
+        help=(
+            "the matching formatted checkpoint file. Recorded in provenance "
+            "only: nothing is rebuilt here. Pass it to 'g16dump rebuild-fock' "
+            "to rebuild the Fock matrices"
+        ),
+    )
     parser.add_argument("--out", required=True, help="path for the .npz bundle")
     parser.add_argument(
         "--reference",
@@ -166,10 +173,12 @@ def _run_extract(args) -> int:
     print(bundle.describe())
     if bundle.is_ks:
         print(f"\nnote: {KS_WARNING}")
+        print(f"next: g16dump rebuild-fock {out} --fch JOB.fch --out REBUILT.npz")
     elif not bundle.has_fock:
         print(
             "\nnote: Gaussian Fock matrix unavailable, so the rebuilt-Fock path "
-            "is required before this bundle can produce a Hamiltonian."
+            "is required before this bundle can produce a Hamiltonian.\n"
+            f"next: g16dump rebuild-fock {out} --fch JOB.fch --out REBUILT.npz"
         )
     return 0
 
@@ -233,7 +242,14 @@ def _run_validate(args) -> int:
         f"  E_act                    {hamiltonian.e_act:.10f} Ha\n"
         f"  E_ref                    {hamiltonian.e_ref:.10f} Ha"
     )
-    if bundle.escf is not None:
+    if bundle.escf is not None and bundle.is_ks:
+        # E_ref is the HF energy of the KS determinant and lies above the DFT
+        # energy; the two are not meant to agree, so they are not compared.
+        print(
+            f"  escf from the job        {bundle.escf:.10f} Ha  (the DFT energy; "
+            f"E_ref is the HF energy of the KS determinant and is not compared)"
+        )
+    elif bundle.escf is not None:
         difference = abs(hamiltonian.e_ref - bundle.escf)
         verdict = "agrees" if difference < 1e-6 else "DISAGREES"
         print(
@@ -448,6 +464,141 @@ def _run_rotate(args) -> int:
     return 0
 
 
+# ------------------------------------------------------------- rebuild-fock
+
+
+def _add_rebuild_fock(subparsers) -> None:
+    parser = subparsers.add_parser(
+        "rebuild-fock",
+        help="rebuild F^alpha/F^beta through PySCF, reading the .fch with MOKIT",
+        description=(
+            "Rebuild a bundle's Fock matrices as F^sigma = Hcore + J[Pa+Pb] -\n"
+            "K[Psigma] from its own orbitals, with PySCF, and write a new bundle.\n"
+            "This is the normal route for Kohn-Sham orbitals and the fallback for\n"
+            "ROHF when Gaussian stored its Roothaan operator, or no usable spin\n"
+            "Fock matrices.\n"
+            "\n"
+            "The PySCF molecule comes from the job's .fch through MOKIT, which is\n"
+            "also what relates Gaussian's AO order and normalization to PySCF's.\n"
+            "Before anything is rebuilt, the .mat overlap and core Hamiltonian\n"
+            "must equal PySCF's after that transformation, and the .mat orbitals\n"
+            "must match the .fch orbitals; any mismatch stops the command.\n"
+            "The new bundle is checked by building its active-space Hamiltonian\n"
+            "before it is written. The input bundle is never modified."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument("bundle", help="the .npz bundle written by extract")
+    parser.add_argument(
+        "--fch", required=True, help="the formatted checkpoint of the same Gaussian job"
+    )
+    parser.add_argument("--out", required=True, help="path for the rebuilt bundle")
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="replace --out if it exists. The input bundle is never replaced",
+    )
+    parser.set_defaults(func=_run_rebuild_fock)
+
+
+def _run_rebuild_fock(args) -> int:
+    import hashlib
+    from pathlib import Path
+
+    source = Path(args.bundle)
+    out = Path(args.out)
+    if out.suffix != ".npz":
+        # np.savez appends .npz itself, so any other name is not where it lands.
+        out = out.with_name(out.name + ".npz")
+    if source.exists() and out.exists() and out.resolve() == source.resolve():
+        print(
+            f"error: --out {out} is the input bundle. rebuild-fock writes a new "
+            f"bundle and never replaces its input; choose another path.",
+            file=sys.stderr,
+        )
+        return 1
+    if out.exists() and not args.force:
+        print(
+            f"error: {out} exists. Pass --force to replace it, or choose another "
+            f"path.",
+            file=sys.stderr,
+        )
+        return 1
+
+    from .fch import with_rebuilt_fock_from_fch
+
+    try:
+        bundle = load(source)
+    except BundleError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    previous = None
+    if bundle.has_fock:
+        try:
+            previous = active_hamiltonian(bundle).spin_deviation
+        except HamiltonianError as exc:
+            previous = exc
+
+    rebuilt, conversion = with_rebuilt_fock_from_fch(bundle, args.fch)
+    hamiltonian = active_hamiltonian(rebuilt)
+
+    if not rebuilt.is_ks and rebuilt.escf is not None:
+        difference = abs(hamiltonian.e_ref - rebuilt.escf)
+        if difference > 1e-6:
+            print(
+                f"error: the rebuilt Fock matrices give E_ref "
+                f"{hamiltonian.e_ref:.10f} Ha, but the job's SCF energy is "
+                f"{rebuilt.escf:.10f} Ha ({difference:.3e} apart). Nothing was "
+                f"written.",
+                file=sys.stderr,
+            )
+            return 1
+
+    record = rebuilt.provenance["fock_rebuild"]
+    record["input_bundle"] = str(source)
+    record["fch_sha256"] = hashlib.sha256(Path(args.fch).read_bytes()).hexdigest()
+    record["spin_deviation"] = hamiltonian.spin_deviation
+    record["e_ref"] = hamiltonian.e_ref
+    record["e_core"] = hamiltonian.e_core
+    save(rebuilt, out)
+
+    checks = conversion.checks
+
+    def _fmt(value):
+        return "n/a" if value is None else f"{value:.3e}"
+
+    print(f"wrote {out}")
+    print(
+        f"  Gaussian -> PySCF AO map   {conversion.kind} (MOKIT fch2py)\n"
+        f"  overlap mismatch           {_fmt(checks['overlap_before'])} before, "
+        f"{_fmt(checks['overlap_after'])} after\n"
+        f"  core Hamiltonian mismatch  {_fmt(checks['hcore_before_rel'])} before, "
+        f"{_fmt(checks['hcore_after_rel'])} after (relative)\n"
+        f"  orbital orthonormality     {_fmt(checks['orthonormality'])}\n"
+        f"  .mat vs MOKIT orbitals     {_fmt(checks['mo_coeff_vs_mokit'])}\n"
+        f"  h' alpha/beta agreement    {hamiltonian.spin_deviation:.3e}\n"
+        f"  E_core                     {hamiltonian.e_core:.10f} Ha\n"
+        f"  E_ref                      {hamiltonian.e_ref:.10f} Ha"
+    )
+    if rebuilt.is_ks:
+        print(
+            "\nnote: E_ref is the HF energy of the Kohn-Sham determinant, not the "
+            "DFT energy, and is expected to lie above it."
+        )
+    if isinstance(previous, HamiltonianError):
+        print(
+            f"\nnote: replaced the {bundle.fock_source} Fock matrices, which could "
+            f"not produce a Hamiltonian: {str(previous).splitlines()[0]}"
+        )
+    elif previous is not None:
+        print(
+            f"\nnote: replaced the {bundle.fock_source} Fock matrices, which "
+            f"already passed the alpha/beta check ({previous:.3e})."
+        )
+    return 0
+
+
 # ------------------------------------------------------------------- parser
 
 
@@ -461,14 +612,16 @@ def build_parser() -> argparse.ArgumentParser:
         epilog=(
             "The usual order is: inspect a .mat, extract it to an .npz bundle, "
             "validate the bundle, then dump an FCIDUMP. Kohn-Sham orbitals "
-            "always need their Fock matrices rebuilt; the stored KS matrix is "
-            "not the HF Fock operator."
+            "always need their Fock matrices rebuilt (rebuild-fock, between "
+            "extract and validate); the stored KS matrix is not the HF Fock "
+            "operator."
         ),
     )
     parser.add_argument("--version", action="version", version=f"g16dump {__version__}")
     subparsers = parser.add_subparsers(dest="command")
     _add_inspect(subparsers)
     _add_extract(subparsers)
+    _add_rebuild_fock(subparsers)
     _add_validate(subparsers)
     _add_dump(subparsers)
     _add_rotate(subparsers)
