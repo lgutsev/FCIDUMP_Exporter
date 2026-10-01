@@ -62,10 +62,23 @@ record the numbers you pass here.
 
 ## Running
 
+Locally, or in an interactive session:
+
 ```bash
 g16 NAME.gjf          # produces NAME.log, NAME.chk, NAME.mat
 formchk NAME.chk NAME.fch
 ```
+
+On LONI, through Slurm (`job_template.slurm` does both, plus the probe):
+
+```bash
+cd gaussian
+sbatch --export=ALL,NAME=probe_ch2_rohf job_template.slurm
+```
+
+Submit from the directory holding the `.gjf`. Slurm copies the batch script to a
+spool area, so the scripts here locate everything through `$SLURM_SUBMIT_DIR`
+rather than `$0`.
 
 The `.fch` is required — MOKIT's `load_mol_from_fch` reads it for both M1
 validation routes and for the rebuilt-Fock fallback path.
@@ -120,8 +133,14 @@ default set with:
 
 ```bash
 cd gaussian
-GAUOPEN_PATH=/path/to/gauopen ./run_probes.sh
+sbatch run_probes.slurm                  # LONI, Slurm
+GAUOPEN_PATH=/path/to/gauopen ./run_probes.sh   # or interactively, anywhere
 ```
+
+`run_probes.slurm` loads `gaussian/g16-c01`, points `GAUSS_SCRDIR` at node-local
+scratch, and finds gauopen at `$g16root/g16/gauopen` so `inspect_mat.py` runs on
+the cluster -- the only place it can. One core and thirty minutes cover the whole
+cheap set; the probe inputs ask for `%nprocshared=1` and at most `%mem=2GB`.
 
 That runs each job, `formchk`s it, runs `inspect_mat.py` where gauopen is
 available, records the environment and tars the lot into one archive. It keeps
@@ -173,7 +192,12 @@ for. It is opt-in because it takes minutes to hours rather than seconds:
 
 ```bash
 PORPHINE=1 ./run_probes.sh
+sbatch --export=ALL,PORPHINE=1 --cpus-per-task=8 --mem=24G        --time=12:00:00 run_probes.slurm
 ```
+
+`sbatch` flags override the `#SBATCH` lines, and `--cpus-per-task` has to match
+the `%nprocshared=8` in the porphine inputs: Gaussian will not notice a mismatch,
+it will simply oversubscribe the allocation.
 
 Run it only after the cheap set has confirmed `ITran=5`. There is no sense
 spending a porphine SCF to discover the route was wrong.

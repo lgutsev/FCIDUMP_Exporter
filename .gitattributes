@@ -27,6 +27,11 @@ legacy/** -text
 # changing it, and stops a Windows checkout from committing CRLF back.
 *.sh text eol=lf
 
+# Slurm batch scripts are shell scripts that only ever run on the cluster,
+# so they need the same guarantee: a CRLF checkout here becomes a "bad
+# interpreter" on Linux, which is a confusing way to lose a probe run.
+*.slurm text eol=lf
+
 # Binary formats, so Git makes no attempt to be clever about them.
 *.npz binary
 *.zip binary
