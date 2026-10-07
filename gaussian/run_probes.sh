@@ -47,10 +47,15 @@ JOBS=(
 #
 #   PORPHINE=1 bash run_probes.sh
 #
-if [ -n "${PORPHINE:-}" ]; then
-  JOBS+=(probe_fe_porphine_singlet probe_fe_porphine_triplet
-         probe_ni_porphine_singlet probe_ni_porphine_triplet)
-fi
+# PORPHINE=singlets runs the two RHF singlets and nothing else: the cheap set has
+# already run (job 1072685), and the ROHF triplets are refused by extract until
+# an ROHF route exists (README.md, "M0 outcome").
+case "${PORPHINE:-}" in
+  "") ;;
+  singlets) JOBS=(probe_fe_porphine_singlet probe_ni_porphine_singlet) ;;
+  *) JOBS+=(probe_fe_porphine_singlet probe_fe_porphine_triplet
+            probe_ni_porphine_singlet probe_ni_porphine_triplet) ;;
+esac
 
 PY="${PYTHON:-python3}"
 echo "gaussian probes -> ${OUT}/"

@@ -234,6 +234,9 @@ for. It is opt-in because it takes minutes to hours rather than seconds:
 ```bash
 PORPHINE=1 bash run_probes.sh
 sbatch --export=ALL,PORPHINE=1 --cpus-per-task=8 --time=12:00:00 run_probes.slurm
+
+# the two RHF singlets only, without the cheap set or the ROHF triplets:
+sbatch --export=ALL,PORPHINE=singlets --cpus-per-task=8 --time=12:00:00 run_probes.slurm
 ```
 
 `sbatch` flags override the `#SBATCH` lines, and `--cpus-per-task` has to match
