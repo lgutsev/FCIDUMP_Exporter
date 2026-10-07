@@ -7,11 +7,18 @@ Gaussian can produce: run ``gaussian/run_probes.sh`` there, unpack the archive
 it writes, and point this at the directory::
 
     G16DUMP_GAUSSIAN_OUTPUTS=probe_results_host_date \\
-    PYTHONPATH=/path/to/gauopen pytest -m gaussian tests/test_gaussian_outputs.py -rA
+    pytest -m gaussian tests/test_gaussian_outputs.py -rA
 
-Needs gauopen, MOKIT and PySCF. Without the variable every test here is
+The ten cheap probes are committed, gzipped, in ``tests/data/g16_c01_probes``;
+unpack them into a directory and point the variable there. Needs MOKIT and
+PySCF (the ``.mat`` is read with numpy). Without the variable every test here is
 skipped, so CI never runs it, and until it has been run on real output the gate
-it encodes is **unexecuted**.
+it encodes is **unexecuted**. The numpy-only checks of the same files run
+everywhere, in ``test_real_mat.py``.
+
+ROHF jobs are expected to be refused by ``extract``: Gaussian transforms ROHF
+integrals over per-spin semicanonical orbitals, not the ROHF ones (see
+``gaussian/README.md``, "M0 outcome").
 
 For each probe it checks: the ``.mat`` overlap and core Hamiltonian against
 PySCF's after MOKIT's transformation, orthonormality of the converted orbitals,
@@ -29,9 +36,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-pytestmark = [
-    pytest.mark.gaussian, pytest.mark.gauopen, pytest.mark.mokit, pytest.mark.pyscf,
-]
+pytestmark = [pytest.mark.gaussian, pytest.mark.mokit, pytest.mark.pyscf]
 
 OUTPUTS = os.environ.get("G16DUMP_GAUSSIAN_OUTPUTS")
 
@@ -83,16 +88,20 @@ def _oracle(mol, mo, hcore, e_nuc, start, stop, nalpha, nbeta):
 @pytest.mark.parametrize("name", list(PROBES))
 def test_real_gaussian_pair_through_mokit(name):
     mat, fch = _pair(name)
-    pytest.importorskip("QCMatEl")
     pytest.importorskip("mokit")
     from pyscf import scf
 
     from g16dump import fch as F
     from g16dump import hamiltonian as H
-    from g16dump.matfile import extract
+    from g16dump.matfile import MatFileError, extract
 
     import mokit
     import pyscf
+
+    if PROBES[name] == "ROHF":
+        with pytest.raises(MatFileError, match="semicanonicalizes"):
+            extract(mat, reference="ROHF", fch=str(fch))
+        return
 
     bundle = extract(mat, reference=PROBES[name], fch=str(fch))
     conversion = F.gaussian_to_pyscf(bundle, fch)

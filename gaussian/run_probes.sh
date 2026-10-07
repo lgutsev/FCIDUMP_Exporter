@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
 # Run the M0 probe jobs and collect everything needed to answer the open
-# questions, in one command, on the cluster where Gaussian and gauopen live.
+# questions, in one command, on the cluster where Gaussian lives.
 #
 #   cd gaussian
-#   GAUOPEN_PATH=/path/to/gauopen ./run_probes.sh
+#   bash run_probes.sh
+#
+# Each .mat is probed with g16dump's own numpy reader (python3 -m g16dump
+# inspect, from the repository one level up). Nothing beyond numpy is needed.
 #
 # Produces probe_results_<host>_<date>.tar.gz next to this script. That archive
 # is the whole deliverable -- send it back and nothing else is needed.
@@ -42,7 +45,7 @@ JOBS=(
 # here once ITran=5 has been confirmed on something cheap -- there is no sense
 # spending a porphine SCF to discover the route was wrong.
 #
-#   PORPHINE=1 ./run_probes.sh
+#   PORPHINE=1 bash run_probes.sh
 #
 if [ -n "${PORPHINE:-}" ]; then
   JOBS+=(probe_fe_porphine_singlet probe_fe_porphine_triplet
@@ -78,15 +81,15 @@ for name in "${JOBS[@]}"; do
 
   if [ -f "${name}.mat" ]; then
     ls -l "${name}.mat" | awk '{print "  .mat is " $5 " bytes"}'
-    if [ -n "${GAUOPEN_PATH:-}" ]; then
-      PYTHONPATH="${GAUOPEN_PATH}:${PYTHONPATH:-}" \
-        "${PY}" ../scripts/inspect_mat.py "${name}.mat" \
-          --json "${OUT}/${name}.probe.json" > "${OUT}/${name}.probe.txt" 2>&1 \
-        && echo "  probe ok" \
-        || echo "  probe FAILED -- see ${OUT}/${name}.probe.txt"
-    else
-      echo "  probe SKIPPED (set GAUOPEN_PATH to run inspect_mat.py here)"
-    fi
+    PYTHONPATH="..:${PYTHONPATH:-}" "${PY}" -m g16dump inspect "${name}.mat" \
+      --json "${OUT}/${name}.probe.json" > "${OUT}/${name}.probe.txt" 2>&1
+    case $? in
+      0) echo "  probe ok" ;;
+      1) if [ -f "${OUT}/${name}.probe.json" ]; then  # read; extract cannot use it as is
+           echo "  probe: read, but extract cannot use it as is -- see ${OUT}/${name}.probe.txt"
+         else echo "  probe FAILED -- see ${OUT}/${name}.probe.txt"; fi ;;
+      *) echo "  probe FAILED -- see ${OUT}/${name}.probe.txt" ;;
+    esac
   else
     echo "  no .mat was produced"
   fi
@@ -100,19 +103,18 @@ done
   echo "g16:      $(command -v g16 || echo 'not found')"
   echo "g16root:  ${g16root:-unset}"
   echo "python:   $(${PY} --version 2>&1)"
-  echo "gauopen:  ${GAUOPEN_PATH:-unset}"
+  echo "numpy:    $(${PY} -c 'import numpy; print(numpy.__version__)' 2>&1)"
 } > "${OUT}/environment.txt"
 
-# The .mat files themselves are small for these systems and are the ground
-# truth, so include them when they are not large.
+# The .mat files are the ground truth, so ship them. Most of a .mat is record
+# padding and compresses about 15x in the archive, so only a huge one stays out.
 for name in "${JOBS[@]}"; do
   if [ -f "${name}.mat" ]; then
     size=$(stat -c%s "${name}.mat" 2>/dev/null || echo 0)
-    if [ "${size}" -lt 20000000 ]; then
+    if [ "${size}" -lt 500000000 ]; then
       cp -f "${name}.mat" "${OUT}/"
     else
-      # A porphine .mat is expected to land here. The probe JSON is the
-      # deliverable; the raw file is only a convenience for the small jobs.
+      # The probe JSON is the deliverable; the raw file is a convenience.
       echo "${name}.mat omitted from the archive, ${size} bytes"         >> "${OUT}/environment.txt"
     fi
   fi

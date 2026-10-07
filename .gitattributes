@@ -38,3 +38,10 @@ legacy/** -text
 *.mat binary
 *.chk binary
 *.fch binary
+
+# Gaussian inputs run on Linux; a CRLF .gjf is read with stray carriage returns
+# (the LONI dispatch desk's fix, 2026-10-02). Stored with LF already.
+*.gjf text eol=lf
+
+# Gzipped Gaussian output committed as test data.
+*.gz binary

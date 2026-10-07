@@ -8,7 +8,7 @@ is not installable from PyPI. Everything that runs in CI runs off committed
 must say so with a marker, or it will fail the build for everyone:
 
 ```python
-@pytest.mark.gauopen      # needs Gaussian's QCMatEl / qcmatrixio
+@pytest.mark.gauopen      # needs Gaussian's QCMatEl (only the optional cross-check)
 @pytest.mark.gaussian     # needs a Gaussian binary, or real .mat/.fch output
 @pytest.mark.mokit        # needs mokit
 @pytest.mark.pyscf        # needs pyscf, the independent oracle
@@ -37,10 +37,11 @@ The `core` job is the important one. It installs only `.[test]` and then runs
 - anything other than `numpy` appears in `[project] dependencies`;
 - `pyscf`, `mokit`, `gauopen`, `QCMatEl`, `qcmatrixio`, `scipy`, `h5py` or
   `pandas` is importable in that environment;
-- any module in `g16dump/` other than `matfile` fails to import without them.
+- any module in `g16dump/` fails to import without them.
 
-That last one is the real invariant: `matfile.py` is the only module allowed to
-touch gauopen, and everything downstream reads the `.npz` bundle instead. Keep
+That last one is the real invariant. `matfile.py` reads Gaussian's `.mat` with
+numpy alone, so no module touches gauopen, and everything downstream reads the
+`.npz` bundle. Keep
 imports of the optional libraries lazy — inside the function that needs them,
 not at module scope.
 
@@ -85,5 +86,6 @@ else available. New dependencies go in an optional extra:
 - `dev` — all three.
 
 `mokit` and `gauopen` are deliberately absent from every extra because neither
-is on PyPI. `gauopen` ships with Gaussian and goes on `PYTHONPATH`; `mokit`
-comes from conda-forge or a source build. See the README for both.
+is on PyPI. Nothing in g16dump needs `gauopen` (it ships with Gaussian and is
+used only by the optional `scripts/inspect_mat.py` cross-check); `mokit` comes
+from conda-forge or a source build. See the README.

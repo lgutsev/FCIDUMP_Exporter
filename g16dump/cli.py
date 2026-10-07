@@ -51,9 +51,9 @@ def _add_inspect(subparsers) -> None:
         description=(
             "Check a Gaussian matrix-element file for the blocks g16dump needs, "
             "report which labels they were found under, and cross-check their "
-            "dimensions against the header. For an exhaustive dump of "
-            "everything a .mat contains, assuming nothing about labels at all, "
-            "use scripts/inspect_mat.py instead."
+            "dimensions against the header. The --json report also lists every "
+            "object the file contains with its stored dimensions. Needs numpy "
+            "only."
         ),
     )
     parser.add_argument("matfile", help="the Gaussian .mat file")
@@ -80,6 +80,8 @@ def _run_inspect(args) -> int:
         f"  frozen {header['nfc']} core and {header['nfv']} virtual, so the "
         f"window is MOs {header['window_1based'][0]}-{header['window_1based'][1]}"
     )
+    if header.get("itran") is not None:
+        print(f"  ITran={header['itran']} (5 is the full transformation)")
     if "eri_nact" in report:
         print(f"  two-electron block spans {report['eri_nact']} orbitals")
 
@@ -114,7 +116,7 @@ def _run_inspect(args) -> int:
 def _add_extract(subparsers) -> None:
     parser = subparsers.add_parser(
         "extract",
-        help="read a Gaussian .mat into an .npz bundle (needs gauopen)",
+        help="read a Gaussian .mat into an .npz bundle",
         description="Read a Gaussian 16 matrix-element file into an .npz bundle.",
     )
     parser.add_argument("matfile", help="the Gaussian .mat file")

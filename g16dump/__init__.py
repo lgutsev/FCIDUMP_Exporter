@@ -7,8 +7,8 @@ middle of it:
                                         --rotate.py-------->  rotated bundle
                                         --write.py--------->  FCIDUMP
 
-Only ``matfile.py`` imports gauopen, and only the rebuilt-Fock path imports
-pyscf. Everything else is numpy.
+``matfile.py`` reads the ``.mat`` with numpy alone; nothing needs gauopen. Only
+the rebuilt-Fock path imports pyscf. Everything else is numpy.
 """
 
 __version__ = "0.1.0"

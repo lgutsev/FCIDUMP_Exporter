@@ -130,12 +130,12 @@ def test_inspect_reports_a_reader_failure_as_a_sentence(capsys, monkeypatch):
     from g16dump import matfile
 
     def _fail(path):
-        raise matfile.MatFileError("gauopen is not importable")
+        raise matfile.MatFileError("broken record marker at byte 0")
 
     monkeypatch.setattr(matfile, "read_matel", _fail)
     code, output = _run(capsys, "inspect", "job.mat")
     assert code == 1
-    assert "gauopen is not importable" in output
+    assert "broken record marker" in output
 
 
 # ------------------------------------------------------- dump and rotate
