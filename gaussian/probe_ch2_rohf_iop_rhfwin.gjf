@@ -1,0 +1,22 @@
+%chk=probe_ch2_rohf_iop_rhfwin.chk
+%mem=2GB
+%nprocshared=1
+#P ROHF/6-31G NoSymm Int=NoBasisTransform SCF=(Conver=10)
+# Output=(MatrixElement,MO2ElectronIntegrals) Tran=(Full,Force) Window=(2,13) IOp(8/40=2)
+
+probe_ch2_rohf_iop_rhfwin: probe_ch2_rohf (IOp(8/40=2) alone). Tests whether
+IOp(8/5) (1 = do not pseudo-canonicalize ROHF orbitals) and IOp(8/40) (2 =
+treat the ROHF window as RHF, transforming only the alpha orbitals) make
+Gaussian transform over the ROHF orbitals themselves. Without them (the M0
+probes) TRANS MO COEFFICIENTS were per-spin semicanonical and g16dump extract
+refused the file. SUCCESS: TRANS MO COEFFICIENTS equal the active ROHF MOs, so
+extract --reference ROHF accepts it, and validate shows h' alpha/beta
+agreement and E_ref = E(SCF).
+
+0 3
+C   0.0000000   0.0000000   0.1900000
+H   0.0000000   0.9900000  -0.5600000
+H   0.0000000  -0.9900000  -0.5600000
+
+probe_ch2_rohf_iop_rhfwin.mat
+

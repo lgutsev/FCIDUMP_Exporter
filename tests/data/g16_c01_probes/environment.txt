@@ -1,0 +1,6 @@
+date:     2026-10-06T21:21:24Z
+host:     qbd007
+g16:      /usr/local/packages/license/gaussian/g16-c01/g16/g16
+g16root:  /usr/local/packages/license/gaussian/g16-c01
+python:   Python 3.12.12
+gauopen:  unset

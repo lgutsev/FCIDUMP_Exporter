@@ -20,7 +20,9 @@ from pathlib import Path
 
 DIST = Path("dist")
 
-FORBIDDEN_SUFFIXES = (".mat", ".fch", ".chk", ".log", ".zip")
+FORBIDDEN_SUFFIXES = (
+    ".mat", ".fch", ".chk", ".log", ".zip", ".mat.gz", ".fch.gz",
+)
 FORBIDDEN_PREFIXES = ("legacy/",)
 
 
