@@ -50,6 +50,15 @@ JOBS=(
 # PORPHINE=singlets runs the two RHF singlets and nothing else: the cheap set has
 # already run (job 1072685), and the ROHF triplets are refused by extract until
 # an ROHF route exists (README.md, "M0 outcome").
+# PROBESET=rohf_route runs only the ROHF-route experiment: the ROHF probes again
+# with IOp(8/5) and IOp(8/40), to see whether Gaussian can be made to transform
+# over the ROHF orbitals instead of per-spin semicanonical ones (README.md,
+# "M0 outcome"). Seconds, one core.
+if [ "${PROBESET:-}" = rohf_route ]; then
+  JOBS=(probe_ch2_rohf_iop_both probe_ch2_rohf_iop_nopc probe_ch2_rohf_iop_rhfwin
+        probe_ch2_rohf_ccpvdz_iop_both probe_nh_rohf_iop_both)
+fi
+
 case "${PORPHINE:-}" in
   "") ;;
   singlets) JOBS=(probe_fe_porphine_singlet probe_ni_porphine_singlet) ;;

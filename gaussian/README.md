@@ -36,9 +36,45 @@ repulsion, 43 SCF energy and 44 S² identified against the `.fch`.
 **singlets** can run. The porphine **triplets** (ROHF) will produce exactly the
 semicanonical integrals above and be refused. Running them is useful only to
 measure timing, until a route that keeps the ROHF orbitals through the
-transformation is found. Untested candidates: hand the converged ROHF orbitals to
-a job type that does not semicanonicalize, or transform the window in PySCF
-instead. RKS jobs extract fine and need `rebuild-fock`, which needs MOKIT and
+transformation is found -- see "The ROHF route" below.
+
+### The ROHF route
+
+Gaussian documents two overlay-8 switches for exactly this (Overlay 8 page,
+gaussian.com/overlay8):
+
+| IOp | Documented meaning |
+|---|---|
+| `IOp(8/5)` | "Whether to pseudo-canonicalize ROHF orbitals": 0 default (yes if ROHF), 1 no, -1 yes, -2 yes and save over the canonical MOs. |
+| `IOp(8/40)` | "Handling of ROHF window": 0 default (documented as 2), 1 ROMP2 approach -- pseudo-canonical alpha and beta orbitals and a UHF transformation, 2 treat as RHF, transforming only the alpha orbitals. |
+
+The M0 ROHF probes set neither (their overlay-8 line is
+`8/6=5,9=40000,10=91,11=11,37=2,38=13/1,4`) and L804 reported an "Open-shell
+transformation" with two passes -- the pseudo-canonical, UHF-style handling,
+although 8/40's documented default is 2. So the documentation alone does not
+settle what these switches do in C.01; `run_rohf_route.slurm` tests it, five
+ROHF probes in seconds on one core:
+
+| Job | Route addition | Answers |
+|---|---|---|
+| `probe_ch2_rohf_iop_both` | `IOp(8/5=1,8/40=2)` | Does the combination give integrals over the ROHF orbitals? |
+| `probe_ch2_rohf_iop_nopc` | `IOp(8/5=1)` | Is switching off the pseudo-canonicalization enough on its own? |
+| `probe_ch2_rohf_iop_rhfwin` | `IOp(8/40=2)` | Is the RHF-style window enough on its own? |
+| `probe_ch2_rohf_ccpvdz_iop_both` | `IOp(8/5=1,8/40=2)` | The same with 11 frozen virtuals, where mixing hit both ends. |
+| `probe_nh_rohf_iop_both` | `IOp(8/5=1,8/40=2)` | The same with degenerate pi SOMOs. |
+
+**Reading the result needs no new code.** `g16dump extract --reference ROHF`
+already compares `TRANS MO COEFFICIENTS` with the active ROHF orbitals: if it
+accepts a file, the integrals are over the ROHF orbitals. Then
+`g16dump validate --hamiltonian` must show `h'` alpha/beta agreement near 1e-12
+and `E_ref` equal to E(SCF), and `E_core` for the CH2 6-31G jobs must match the
+PySCF value in the table below (−28.6809764260), since it does not depend on how
+the orbitals are rotated within their blocks. An IOp Gaussian rejects ends in
+"Error termination"; that is an answer too.
+
+If one combination works, it goes into the ROHF route templates and the porphine
+triplets, and the singlet–triplet comparison can run. If none does, the fallback
+is to transform the window in PySCF from the `.fch` orbitals. RKS jobs extract fine and need `rebuild-fock`, which needs MOKIT and
 PySCF and has **still not been run** on these real pairs
 (`tests/test_gaussian_outputs.py`).
 
