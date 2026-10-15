@@ -272,6 +272,22 @@ unique integrals. Windowed to 21 it is about 24000. If this job finishes in
 minutes, the "seconds where a full-space dump takes days" claim in the top-level
 README stops being an assertion and becomes a measurement. Capture the wall time.
 
+**Measured: the singlets (LONI job 1079620, 2026-10-08, `run_porphine_singlets.slurm`, 8 cores).**
+
+| Job | NBasis | NFC / NFV | active | ITran | E(RHF) | cycles | wall / CPU |
+|---|---|---|---|---|---|---|---|
+| `probe_fe_porphine_singlet` | 269 | 82 / 166 | 21 (MOs 83–103) | 5 | −2244.01125002 | 19 | 25.3 s / 3 min 19.5 s |
+| `probe_ni_porphine_singlet` | 269 | 83 / 165 | 21 (MOs 84–104) | 5 | −2488.41241972 | 20 | 26.3 s / 3 min 28.5 s |
+
+The whole job -- SCF, windowed transformation, `.mat` -- takes under half a
+minute, so the claim is now a measurement. Read with `g16dump extract
+--reference RHF`: 15 objects per file span several data records and read
+correctly; MO coefficients match the `.fch` to 4e-8 and densities to 5e-9;
+`TRANS MO COEFFICIENTS` equal the active orbitals exactly; `E_ref` reproduces
+E(RHF) to 9e-9 (Fe) and 2e-8 (Ni), with `E_core` −2199.45758103 and
+−2444.81541265. Each `.mat` is 7.8 MB; it is not committed. The output is on D:
+in `hpc_smoke_tests/22_g16dump_probes/gaussian/probe_results/probe_results_qbd405_20261008/`.
+
 **The comparison that matters.** Dump both spin states and compare their
 reference energies. The legacy dumps put the ROHF triplet **0.673 Ha below** the
 RHF singlet, which is impossible; `tests/test_legacy_regression.py` measures
