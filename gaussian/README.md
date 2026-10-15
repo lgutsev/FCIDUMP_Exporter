@@ -279,8 +279,12 @@ README stops being an assertion and becomes a measurement. Capture the wall time
 | `probe_fe_porphine_singlet` | 269 | 82 / 166 | 21 (MOs 83–103) | 5 | −2244.01125002 | 19 | 25.3 s / 3 min 19.5 s |
 | `probe_ni_porphine_singlet` | 269 | 83 / 165 | 21 (MOs 84–104) | 5 | −2488.41241972 | 20 | 26.3 s / 3 min 28.5 s |
 
-The whole job -- SCF, windowed transformation, `.mat` -- takes under half a
-minute, so the claim is now a measurement. Read with `g16dump extract
+Per Gaussian link (Fe; Ni within 0.1 s): SCF (l502) 20.2 s wall / 160 s CPU;
+the windowed transformation itself (l804, 21 orbitals, 26,796 unique integrals)
+**3.4 s wall / 27 s CPU**; everything else about 1 s. That is the measured half
+of the claim above. The other half -- how long a full-space transformation and
+dump takes -- has **not** been measured here: no full 269-orbital job was run
+(about 6.6x10^8 unique integrals, ~5 GB). Read with `g16dump extract
 --reference RHF`: 15 objects per file span several data records and read
 correctly; MO coefficients match the `.fch` to 4e-8 and densities to 5e-9;
 `TRANS MO COEFFICIENTS` equal the active orbitals exactly; `E_ref` reproduces

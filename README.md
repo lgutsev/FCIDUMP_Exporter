@@ -8,8 +8,9 @@ ever transforming integrals over the full MO space.
 
 Gaussian transforms the two-electron integrals over the active window only. The
 frozen core is folded analytically into an effective one-electron Hamiltonian
-`h'` and a scalar `E_core`. This takes seconds where a full-space dump takes
-days.
+`h'` and a scalar `E_core`. Measured on Fe porphine (269 basis functions,
+CAS(22,21), 8 cores): the windowed transformation takes 3.4 s, the whole Gaussian
+job 25 s. A full-space dump for comparison has not been timed.
 
 **Status: the pipeline is complete from the `.npz` bundle onward and tested;
 `extract` has not yet read a real `.mat`.** The bundle, the open-shell
