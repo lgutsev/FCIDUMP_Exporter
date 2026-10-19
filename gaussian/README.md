@@ -72,9 +72,24 @@ PySCF value in the table below (−28.6809764260), since it does not depend on h
 the orbitals are rotated within their blocks. An IOp Gaussian rejects ends in
 "Error termination"; that is an answer too.
 
-If one combination works, it goes into the ROHF route templates and the porphine
-triplets, and the singlet–triplet comparison can run. If none does, the fallback
-is to transform the window in PySCF from the `.fch` orbitals. RKS jobs extract fine and need `rebuild-fock`, which needs MOKIT and
+**Result (LONI job 1108620, 2026-10-16, dispatch package 63): neither switch
+helps.**
+
+- `IOp(8/40=2)` alone (`probe_ch2_rohf_iop_rhfwin`) is accepted and changes
+  nothing: L804 still reports "Open-shell transformation", and every 2e block,
+  `TRANS MO COEFFICIENTS` and both Fock matrices are bit-identical to
+  `probe_ch2_rohf` without it. `extract` refuses it with the same 1.457
+  deviation.
+- Every job with `IOp(8/5=1)` (`iop_both`, `iop_nopc`, `ccpvdz_iop_both`,
+  `nh_iop_both`) completes the SCF and then dies inside L804 with "Operation on
+  file out of range ... Error termination in NtrErr": in C.01 the open-shell
+  transformation cannot run on ROHF orbitals that were not pseudo-canonicalized.
+
+So in G16 C.01 there is no overlay-8 switch that gives windowed integrals over
+the ROHF orbitals. What remains, untested: transform the window in PySCF from
+the ROHF orbitals -- the `rebuild-fock` path already builds the PySCF molecule
+through MOKIT and carries the `.mat` orbitals into it -- or a two-step Gaussian
+job that presents the ROHF orbitals as something other than ROHF. RKS jobs extract fine and need `rebuild-fock`, which needs MOKIT and
 PySCF and has **still not been run** on these real pairs
 (`tests/test_gaussian_outputs.py`).
 
