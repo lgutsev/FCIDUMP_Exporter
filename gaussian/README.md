@@ -67,9 +67,11 @@ ROHF probes in seconds on one core:
 already compares `TRANS MO COEFFICIENTS` with the active ROHF orbitals: if it
 accepts a file, the integrals are over the ROHF orbitals. Then
 `g16dump validate --hamiltonian` must show `h'` alpha/beta agreement near 1e-12
-and `E_ref` equal to E(SCF), and `E_core` for the CH2 6-31G jobs must match the
-PySCF value in the table below (−28.6809764260), since it does not depend on how
-the orbitals are rotated within their blocks. An IOp Gaussian rejects ends in
+and `E_ref` equal to E(SCF). (`E_core` is not comparable with the PySCF table
+below for ROHF: the two programs canonicalize ROHF orbitals differently, which
+mixes the frozen core with the active doubly occupied orbitals and moves `E_core`
+-- by 8.5e-5 Ha on CH2 -- while leaving `E_ref` alone. Only RHF canonical orbitals
+are unique.) An IOp Gaussian rejects ends in
 "Error termination"; that is an answer too.
 
 **Result (LONI job 1108620, 2026-10-16, dispatch package 63): neither switch
@@ -86,12 +88,23 @@ helps.**
   transformation cannot run on ROHF orbitals that were not pseudo-canonicalized.
 
 So in G16 C.01 there is no overlay-8 switch that gives windowed integrals over
-the ROHF orbitals. What remains, untested: transform the window in PySCF from
-the ROHF orbitals -- the `rebuild-fock` path already builds the PySCF molecule
-through MOKIT and carries the `.mat` orbitals into it -- or a two-step Gaussian
-job that presents the ROHF orbitals as something other than ROHF. RKS jobs extract fine and need `rebuild-fock`, which needs MOKIT and
-PySCF and has **still not been run** on these real pairs
-(`tests/test_gaussian_outputs.py`).
+the ROHF orbitals.
+
+**The route that works: PySCF integrals.** `g16dump extract --integrals pyscf
+--fch JOB.fch` keeps the orbitals and the overlap from the `.mat` and builds the
+core Hamiltonian, both Fock matrices and the active `(tu|vw)` with PySCF over
+those orbitals, through MOKIT's Gaussian -> PySCF AO map. The whole Hamiltonian
+comes from one integral code: with Gaussian's core Hamiltonian under PySCF's J
+and K, `E_ref` was 1-2e-6 Ha off, from the basis-set digits the two programs
+carry. `tests/test_pyscf_integrals.py` runs it on the real CH2 and NH ROHF files
+in CI (an s/p AO permutation stands in for MOKIT there): the alpha/beta gate
+closes, `E_ref` matches Gaussian's E(ROHF) to 3e-7, and `h'`, `E_core` and
+`E_ref` match a full-space PySCF transform in the same orbitals. On the RHF
+files the same route reproduces Gaussian's own active integrals. Running it
+needs PySCF and MOKIT wherever `extract` runs.
+
+RKS jobs extract fine and need `rebuild-fock`, which needs MOKIT and PySCF and
+has **still not been run** on these real pairs (`tests/test_gaussian_outputs.py`).
 
 ## Why the route looks like this
 

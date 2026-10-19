@@ -40,18 +40,28 @@ from g16dump.matfile import MatFileError, extract, read_mat  # noqa: E402
 PROBES = Path(__file__).resolve().parent / "data" / "g16_c01_probes"
 
 #: Probe -> (PySCF basis name, reference, E_core from the PySCF fixtures or None).
+#: Only RHF has a fixture E_core to compare: canonical RHF orbitals are unique,
+#: but ROHF canonicalization is not, and Gaussian's differs from PySCF's by a
+#: rotation that mixes the frozen core with the active doubly occupied orbitals.
+#: That leaves E_ref alone and moves E_core (by 8.5e-5 Ha on CH2, measured in
+#: CI), so ROHF is checked against a full transform in its own orbitals instead.
 CASES = {
     "probe_h2o_rhf": ("sto-3g", "RHF", -51.4711696318),
     "probe_h2o_frozen_virtual": ("6-31g", "RHF", -52.1215325375),
-    "probe_ch2_rohf": ("6-31g", "ROHF", -28.6809764260),
+    "probe_ch2_rohf": ("6-31g", "ROHF", None),
     "probe_nh_rohf": ("6-31g", "ROHF", None),
 }
 
 #: The whole Hamiltonian is PySCF's, over Gaussian's converged orbitals, so it
 #: differs from Gaussian's own energy only through the basis-set digits the two
 #: programs carry: Gaussian's E(SCF) and the PySCF fixtures' differ by 7e-9 to
-#: 5e-8 Ha on these jobs. (With Gaussian's Hcore mixed in it was 1-2e-6.)
-CROSS_PROGRAM_ENERGY = 2e-7
+#: 5e-8 Ha on these jobs, and CI measured up to 2.7e-7 here (NH, whose N core
+#: Hamiltonian differs most). With Gaussian's Hcore mixed in it was 1-2e-6.
+CROSS_PROGRAM_ENERGY = 5e-7
+
+#: The full-transform oracle uses the same integral code and the same orbitals,
+#: so only the frozen-core algebra separates it from the bundle.
+SAME_PROGRAM = 1e-8
 
 
 def _conversion(path: Path, basis: str):
@@ -91,7 +101,8 @@ def pyscf_extract(monkeypatch):
         path = PROBES / f"{name}.mat.gz"
         conversion = _conversion(path, basis)
         monkeypatch.setattr(F, "gaussian_to_pyscf", lambda bundle, fch, **kw: conversion)
-        return extract(path, reference=reference, integrals="pyscf", fch="unused.fch")
+        bundle = extract(path, reference=reference, integrals="pyscf", fch="unused.fch")
+        return bundle, conversion
 
     return _extract
 
@@ -100,7 +111,7 @@ def pyscf_extract(monkeypatch):
 def test_pyscf_reproduces_gaussians_own_rhf_integrals(pyscf_extract, name):
     """Where Gaussian's integrals are trustworthy, PySCF must give the same ones."""
     gaussian = extract(PROBES / f"{name}.mat.gz", reference="RHF")
-    pyscf_bundle = pyscf_extract(name)
+    pyscf_bundle, _ = pyscf_extract(name)
     assert pyscf_bundle.provenance["eri_source"] == "pyscf"
     assert gaussian.provenance["eri_source"] == "gaussian"
     scale = float(np.max(np.abs(gaussian.eri_active)))
@@ -109,8 +120,16 @@ def test_pyscf_reproduces_gaussians_own_rhf_integrals(pyscf_extract, name):
 
 @pytest.mark.parametrize("name", list(CASES))
 def test_pyscf_integrals_close_the_algebra(pyscf_extract, name):
+    from pyscf import scf
+    from test_oracles import (
+        _full_eri,
+        _oracle_determinant_energy,
+        _oracle_frozen_core,
+        _oracle_to_mo,
+    )
+
     _, reference, e_core = CASES[name]
-    bundle = pyscf_extract(name)
+    bundle, conversion = pyscf_extract(name)
     assert bundle.fock_source == "pyscf_rebuilt"
     result = H.active_hamiltonian(bundle)
     # Every two-electron quantity comes from PySCF, so alpha and beta agree to
@@ -120,12 +139,26 @@ def test_pyscf_integrals_close_the_algebra(pyscf_extract, name):
     if e_core is not None:
         assert result.e_core == pytest.approx(e_core, abs=CROSS_PROGRAM_ENERGY)
 
+    # Independent of the windowed algebra: the textbook frozen-core reduction
+    # over the full MO integral set, in the same orbitals.
+    mo = conversion.mo_coeff_pyscf(bundle.C)
+    hcore_mo = _oracle_to_mo(np.asarray(scf.hf.get_hcore(conversion.mol)), mo)
+    eri = _full_eri(conversion.mol, mo)
+    start, stop = bundle.active_start, bundle.active_stop
+    h_eff, oracle_e_core = _oracle_frozen_core(hcore_mo, eri, bundle.enuc, start, start, stop)
+    oracle_e_ref = _oracle_determinant_energy(
+        hcore_mo, eri, bundle.nalpha, bundle.nbeta, constant=bundle.enuc
+    )
+    assert np.max(np.abs(result.h_eff - h_eff)) < SAME_PROGRAM
+    assert result.e_core == pytest.approx(oracle_e_core, abs=SAME_PROGRAM)
+    assert result.e_ref == pytest.approx(oracle_e_ref, abs=SAME_PROGRAM)
+
 
 @pytest.mark.parametrize("name", ["probe_ch2_rohf", "probe_nh_rohf"])
 def test_rohf_is_refused_without_and_accepted_with_pyscf(pyscf_extract, name):
     with pytest.raises(MatFileError, match="integrals pyscf"):
         extract(PROBES / f"{name}.mat.gz", reference="ROHF")
-    bundle = pyscf_extract(name)
+    bundle, _ = pyscf_extract(name)
     assert bundle.provenance["trans_mo_coeff_deviation"] > 0.1  # recorded, not hidden
     assert bundle.nact == 12 if name == "probe_ch2_rohf" else bundle.nact == 10
 
@@ -134,7 +167,7 @@ def test_pyscf_rohf_integrals_are_close_to_gaussians_semicanonical_ones(pyscf_ex
     """A link to Gaussian for ROHF too: its AA block, rotated into the ROHF
     orbitals, differs from PySCF's only by the semicanonical drift (~1e-4)."""
     name = "probe_ch2_rohf"
-    bundle = pyscf_extract(name)
+    bundle, _ = pyscf_extract(name)
     m = read_mat(PROBES / f"{name}.mat.gz")
     trans = m.matlist["TRANS MO COEFFICIENTS"].expand()[:, :, 0]
     u = trans.T @ bundle.S @ bundle.C[:, bundle.active]
