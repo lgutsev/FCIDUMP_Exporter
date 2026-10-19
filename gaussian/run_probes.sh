@@ -62,6 +62,9 @@ fi
 case "${PORPHINE:-}" in
   "") ;;
   singlets) JOBS=(probe_fe_porphine_singlet probe_ni_porphine_singlet) ;;
+  # The ROHF triplets, for extract --integrals pyscf (their Gaussian integrals
+  # are semicanonical and unused; the orbitals, overlap and .fch are what count).
+  triplets) JOBS=(probe_fe_porphine_triplet probe_ni_porphine_triplet) ;;
   *) JOBS+=(probe_fe_porphine_singlet probe_fe_porphine_triplet
             probe_ni_porphine_singlet probe_ni_porphine_triplet) ;;
 esac
