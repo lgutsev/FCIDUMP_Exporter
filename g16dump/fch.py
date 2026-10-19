@@ -499,12 +499,74 @@ def with_rebuilt_fock_from_fch(bundle, fch, **tolerances):
     return rebuilt, conversion
 
 
+def active_integrals(conversion: AOConversion, mo_coeff: np.ndarray, active: slice) -> np.ndarray:
+    """``(tu|vw)`` over the active orbitals, transformed by PySCF.
+
+    ``mo_coeff`` is in the bundle's (Gaussian) AO basis; it is carried into the
+    ``Mole``'s basis by ``conversion`` and only its active columns are
+    transformed. Chemists' order, ``eri[t, u, v, w] = (tu|vw)``, as everywhere
+    in a bundle. ``ao2mo`` works from the AO integrals out of core, so the full
+    AO tensor is never held in memory.
+    """
+    from pyscf import ao2mo
+
+    mo = conversion.mo_coeff_pyscf(np.asarray(mo_coeff, dtype=np.float64))[:, active]
+    n = mo.shape[1]
+    eri = ao2mo.kernel(conversion.mol, mo, compact=False)
+    return np.ascontiguousarray(np.asarray(eri, dtype=np.float64).reshape(n, n, n, n))
+
+
+def with_pyscf_integrals(bundle, fch=None, *, conversion: AOConversion | None = None,
+                         **tolerances):
+    """``bundle`` with its active integrals and Fock matrices built by PySCF.
+
+    The route for ROHF: Gaussian transforms ROHF integrals over per-spin
+    semicanonical orbitals, never the ROHF ones, and no overlay-8 switch changes
+    that in G16 C.01 (gaussian/README.md, "The ROHF route"). Here the orbitals,
+    overlap and core Hamiltonian stay the ``.mat``'s; ``(tu|vw)`` and
+    ``F^sigma = Hcore + J[Pa+Pb] - K[Psigma]`` are both built by PySCF from those
+    orbitals, so every two-electron quantity comes from one integral code. Mixing
+    PySCF integrals with Gaussian's stored Fock matrices would leave the
+    alpha/beta gate a basis-set-digit mismatch (~1e-6 Ha) to trip over.
+
+    ``conversion`` defaults to :func:`gaussian_to_pyscf` on ``fch``, which reads
+    the ``.fch`` through MOKIT and verifies the AO map. Returns the new bundle
+    and the conversion used.
+    """
+    from dataclasses import replace
+
+    from .hamiltonian import with_rebuilt_fock
+
+    if conversion is None:
+        if fch is None:
+            raise FchError("PySCF integrals need the job's .fch, or an AOConversion")
+        conversion = gaussian_to_pyscf(bundle, fch, **tolerances)
+    eri = active_integrals(conversion, bundle.C, bundle.active)
+
+    provenance = dict(bundle.provenance)
+    provenance["eri_source"] = "pyscf"
+    provenance["eri_build"] = {
+        "method": "pyscf ao2mo over the .mat orbitals carried into the Mole's AO basis",
+        "replaced_eri_source": bundle.provenance.get("eri_source", "gaussian"),
+    }
+    with_eri = replace(bundle, eri_active=eri, provenance=provenance)
+    try:
+        record = conversion.provenance()
+    except Exception as exc:  # noqa: BLE001 - provenance must not mask a result
+        record = {"transform": conversion.kind, "provenance_error": repr(exc)}
+    rebuilt = with_rebuilt_fock(
+        with_eri, conversion.mol, ao_transform=conversion.transform, conversion=record
+    )
+    return rebuilt, conversion
+
+
 __all__ = [
     "AO_HCORE_RTOL",
     "AO_OVERLAP_TOL",
     "AOConversion",
     "FchError",
     "ORBITAL_TOL",
+    "active_integrals",
     "ao_transform_from_fch",
     "describe_transform",
     "fch_mo_coeff",
@@ -515,5 +577,6 @@ __all__ = [
     "read_fch_array",
     "read_fch_scalar",
     "require_mokit",
+    "with_pyscf_integrals",
     "with_rebuilt_fock_from_fch",
 ]

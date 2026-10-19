@@ -608,7 +608,9 @@ def read_mat(path) -> MatFile:
     return MatFile(path)
 
 
-def _check_transformed_orbitals(me, keys, active_coeffs, path) -> float | None:
+def _check_transformed_orbitals(
+    me, keys, active_coeffs, path, *, refuse: bool = True
+) -> float | None:
     """Confirm the two-electron integrals are over the bundle's own orbitals.
 
     Gaussian writes the orbitals its transformation actually used as
@@ -623,6 +625,8 @@ def _check_transformed_orbitals(me, keys, active_coeffs, path) -> float | None:
     ``active_coeffs`` holds the active alpha coefficients and, optionally, the
     beta ones; the second slice is compared with the last given. Returns the
     largest deviation found, or ``None`` when the file does not carry the block.
+    With ``refuse=False`` a mismatch is returned rather than raised: the caller
+    is about to replace the integrals.
     """
     label = find_label(keys, ["TRANS MO COEFFICIENTS"])
     if label is None:
@@ -644,7 +648,7 @@ def _check_transformed_orbitals(me, keys, active_coeffs, path) -> float | None:
         active_coeff = active_coeffs[min(spin, len(active_coeffs) - 1)]
         signs = np.where(np.sum(used * active_coeff, axis=0) < 0, -1.0, 1.0)
         worst = max(worst, float(np.max(np.abs(used * signs - active_coeff))))
-    if worst > TRANS_TOL:
+    if worst > TRANS_TOL and refuse:
         raise MatFileError(
             f"{path}: the two-electron integrals are not over the stored "
             f"orbitals. {label} differs from the active MO coefficients by "
@@ -654,7 +658,9 @@ def _check_transformed_orbitals(me, keys, active_coeffs, path) -> float | None:
             f"transformation, so AA, BA and BB are over three different orbital "
             f"sets, none of them the ROHF one, and the frozen core mixes into "
             f"the active space on the way. A spin-restricted FCIDUMP cannot be "
-            f"built from them. See gaussian/README.md, 'M0 outcome'."
+            f"built from them. Build the integrals in PySCF instead: "
+            f"extract --integrals pyscf --fch JOB.fch (needs PySCF and MOKIT). "
+            f"See gaussian/README.md, 'The ROHF route'."
         )
     return worst
 
@@ -668,6 +674,7 @@ def extract(
     route: str | None = None,
     basis: str | None = None,
     method: str | None = None,
+    integrals: str = "gaussian",
 ) -> Bundle:
     """Build a bundle from the Gaussian matrix-element file at ``path``.
 
@@ -675,7 +682,23 @@ def extract(
     ``window`` is the 1-based ``(NFIRST, NLAST)`` pair from the Gaussian route.
     Omit it to take the frozen-core partition the file reports, which is then
     cross-checked against the dimension of the two-electron block regardless.
+
+    ``integrals="gaussian"`` (the default, numpy only) takes the active
+    two-electron integrals from the file and refuses a file whose integrals are
+    not over the stored orbitals, which is every ROHF one. ``integrals="pyscf"``
+    builds them, and the Fock matrices, with PySCF over the stored orbitals
+    instead (:func:`g16dump.fch.with_pyscf_integrals`); it needs ``fch`` and
+    PySCF and MOKIT. Everything one-electron still comes from the ``.mat``.
     """
+    if integrals not in ("gaussian", "pyscf"):
+        raise MatFileError(
+            f"integrals={integrals!r}: expected 'gaussian' or 'pyscf'"
+        )
+    if integrals == "pyscf" and fch is None:
+        raise MatFileError(
+            "integrals='pyscf' needs the job's .fch: PySCF's molecule and the "
+            "Gaussian->PySCF AO map are both read from it (through MOKIT)"
+        )
     path = Path(path)
     reference = reference.upper()
     if reference not in REFERENCES:
@@ -769,7 +792,8 @@ def extract(
             f"way the route intended. Do not work around this; fix the route."
         )
     trans_deviation = _check_transformed_orbitals(
-        me, keys, [mo_coeff[:, active_first - 1 : active_last]], path
+        me, keys, [mo_coeff[:, active_first - 1 : active_last]], path,
+        refuse=integrals == "gaussian",
     )
 
     # --------------------------------------------------------- Fock matrices
@@ -839,12 +863,13 @@ def extract(
                 ("ks_note", ks_note),
                 ("itran", _attr(me, ["itran"])),
                 ("trans_mo_coeff_deviation", trans_deviation),
+                ("eri_source", "gaussian"),
             )
             if value is not None
         } or None,
     )
 
-    return Bundle(
+    bundle = Bundle(
         reference_type=reference,
         charge=charge,
         multiplicity=multiplicity,
@@ -875,6 +900,14 @@ def extract(
         escf=_scalar(me, SCALARS["escf"]),
         provenance=provenance,
     )
+    if integrals == "gaussian":
+        return bundle
+    # Gaussian's block was read only to confirm the window; it is replaced
+    # before the bundle leaves this function, so it is never used.
+    from .fch import with_pyscf_integrals
+
+    rebuilt, _ = with_pyscf_integrals(bundle, fch)
+    return rebuilt
 
 
 # ----------------------------------------------------------------- survey

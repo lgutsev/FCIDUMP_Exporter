@@ -170,4 +170,6 @@ def test_rebuild_fock_without_mokit_says_how_to_get_it(
 def test_extract_help_no_longer_implies_a_rebuild(capsys):
     with pytest.raises(SystemExit):
         main(["extract", "--help"])
-    assert "nothing is rebuilt here" in " ".join(capsys.readouterr().out.split())
+    text = " ".join(capsys.readouterr().out.split()).lower()
+    assert "without --integrals pyscf it is recorded in provenance only" in text
+    assert "nothing is rebuilt here" in text
