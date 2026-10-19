@@ -47,10 +47,11 @@ CASES = {
     "probe_nh_rohf": ("6-31g", "ROHF", None),
 }
 
-#: Gaussian and PySCF carry their basis sets to different digits; measured
-#: differences in the AO matrices are up to 3.4e-7 of scale (test_real_mat.py).
-#: Energies that mix one Gaussian matrix with PySCF ones inherit that.
-CROSS_PROGRAM_ENERGY = 1e-6
+#: The whole Hamiltonian is PySCF's, over Gaussian's converged orbitals, so it
+#: differs from Gaussian's own energy only through the basis-set digits the two
+#: programs carry: Gaussian's E(SCF) and the PySCF fixtures' differ by 7e-9 to
+#: 5e-8 Ha on these jobs. (With Gaussian's Hcore mixed in it was 1-2e-6.)
+CROSS_PROGRAM_ENERGY = 2e-7
 
 
 def _conversion(path: Path, basis: str):

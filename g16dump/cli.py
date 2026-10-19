@@ -155,7 +155,8 @@ def _add_extract(subparsers) -> None:
         help=(
             "where the active two-electron integrals come from. 'gaussian' (the "
             "default, numpy only) reads them from the .mat. 'pyscf' builds them, "
-            "and the Fock matrices, with PySCF over the .mat orbitals; it needs "
+            "the Fock matrices and the core Hamiltonian with PySCF over the .mat "
+            "orbitals; it needs "
             "--fch, PySCF and MOKIT, and it is the route for ROHF, whose Gaussian "
             "integrals are over semicanonical orbitals"
         ),
@@ -190,7 +191,8 @@ def _run_extract(args) -> int:
     if args.integrals == "pyscf":
         hamiltonian = active_hamiltonian(bundle)
         print(
-            f"\nintegrals and Fock matrices built by PySCF over the .mat orbitals\n"
+            f"\nHamiltonian (Hcore, Fock, active integrals) built by PySCF over the "
+            f".mat orbitals\n"
             f"  h' alpha/beta agreement  {hamiltonian.spin_deviation:.3e}\n"
             f"  E_core                   {hamiltonian.e_core:.10f} Ha\n"
             f"  E_ref                    {hamiltonian.e_ref:.10f} Ha"

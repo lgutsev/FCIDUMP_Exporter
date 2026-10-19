@@ -522,12 +522,12 @@ def with_pyscf_integrals(bundle, fch=None, *, conversion: AOConversion | None = 
 
     The route for ROHF: Gaussian transforms ROHF integrals over per-spin
     semicanonical orbitals, never the ROHF ones, and no overlay-8 switch changes
-    that in G16 C.01 (gaussian/README.md, "The ROHF route"). Here the orbitals,
-    overlap and core Hamiltonian stay the ``.mat``'s; ``(tu|vw)`` and
-    ``F^sigma = Hcore + J[Pa+Pb] - K[Psigma]`` are both built by PySCF from those
-    orbitals, so every two-electron quantity comes from one integral code. Mixing
-    PySCF integrals with Gaussian's stored Fock matrices would leave the
-    alpha/beta gate a basis-set-digit mismatch (~1e-6 Ha) to trip over.
+    that in G16 C.01 (gaussian/README.md, "The ROHF route"). Here the orbitals
+    and the overlap stay the ``.mat``'s; the core Hamiltonian, ``(tu|vw)`` and
+    ``F^sigma = Hcore + J[Pa+Pb] - K[Psigma]`` are all built by PySCF over those
+    orbitals, so the whole Hamiltonian comes from one integral code. Gaussian
+    and PySCF carry basis sets to different digits, and mixing their matrices
+    costs about 1e-6 Ha in E_ref -- enough to trip the gates.
 
     ``conversion`` defaults to :func:`gaussian_to_pyscf` on ``fch``, which reads
     the ``.fch`` through MOKIT and verifies the AO map. Returns the new bundle
@@ -541,15 +541,26 @@ def with_pyscf_integrals(bundle, fch=None, *, conversion: AOConversion | None = 
         if fch is None:
             raise FchError("PySCF integrals need the job's .fch, or an AOConversion")
         conversion = gaussian_to_pyscf(bundle, fch, **tolerances)
+    from pyscf import scf
+
     eri = active_integrals(conversion, bundle.C, bundle.active)
+    # The core Hamiltonian is PySCF's as well. Gaussian and PySCF carry basis
+    # sets to different digits (~5e-8 relative in Hcore), and Gaussian's Hcore
+    # under PySCF's J and K puts E_ref ~2e-6 Ha off on CH2 (measured in CI).
+    # One integral code for the whole Hamiltonian; the orbitals and the overlap
+    # stay the .mat's.
+    transform = conversion.transform
+    hcore = transform.T @ np.asarray(scf.hf.get_hcore(conversion.mol)) @ transform
 
     provenance = dict(bundle.provenance)
     provenance["eri_source"] = "pyscf"
     provenance["eri_build"] = {
         "method": "pyscf ao2mo over the .mat orbitals carried into the Mole's AO basis",
         "replaced_eri_source": bundle.provenance.get("eri_source", "gaussian"),
+        "hcore": "pyscf, carried into the .mat AO basis",
+        "hcore_vs_mat_max_abs": float(np.max(np.abs(hcore - bundle.Hcore_ao))),
     }
-    with_eri = replace(bundle, eri_active=eri, provenance=provenance)
+    with_eri = replace(bundle, eri_active=eri, Hcore_ao=hcore, provenance=provenance)
     try:
         record = conversion.provenance()
     except Exception as exc:  # noqa: BLE001 - provenance must not mask a result

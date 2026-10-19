@@ -686,9 +686,10 @@ def extract(
     ``integrals="gaussian"`` (the default, numpy only) takes the active
     two-electron integrals from the file and refuses a file whose integrals are
     not over the stored orbitals, which is every ROHF one. ``integrals="pyscf"``
-    builds them, and the Fock matrices, with PySCF over the stored orbitals
-    instead (:func:`g16dump.fch.with_pyscf_integrals`); it needs ``fch`` and
-    PySCF and MOKIT. Everything one-electron still comes from the ``.mat``.
+    builds them, the Fock matrices and the core Hamiltonian with PySCF over
+    the stored orbitals instead (:func:`g16dump.fch.with_pyscf_integrals`); it
+    needs ``fch`` and PySCF and MOKIT. The orbitals and overlap stay the
+    ``.mat``'s.
     """
     if integrals not in ("gaussian", "pyscf"):
         raise MatFileError(
