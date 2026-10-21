@@ -8,8 +8,9 @@ Two things are checked, and both are project invariants rather than style:
    path has to run on a cluster login node with nothing else available.
 
 2. The modules the core path must never need are not importable in this
-   environment, and the package still imports without them. ``matfile`` is the
-   one module allowed to need gauopen, so it is exempt from the import probe.
+   environment, and every module of the package still imports without them.
+   That includes ``matfile``: it reads Gaussian's ``.mat`` with numpy alone, so
+   nothing in g16dump needs gauopen any more.
 
 Run it in an environment built from ``pip install .`` plus test tooling only.
 """
@@ -35,9 +36,6 @@ FORBIDDEN_MODULES = ("pyscf", "mokit", "gauopen", "QCMatEl", "qcmatrixio")
 # Heavy scientific dependencies that would silently arrive as a transitive
 # requirement of something added to `dependencies`.
 FORBIDDEN_TRANSITIVE = ("scipy", "h5py", "pandas")
-
-# The only module permitted to import gauopen.
-GAUOPEN_MODULE = "matfile"
 
 
 def requirement_name(spec: str) -> str:
@@ -93,7 +91,7 @@ def check_package_imports() -> list[str]:
         return [f"import g16dump failed without pyscf/gauopen installed: {exc!r}"]
 
     for mod in pkgutil.iter_modules(pkg.__path__):
-        if mod.name == GAUOPEN_MODULE:
+        if mod.name == "__main__":  # runs the CLI on import; it only imports cli
             continue
         try:
             importlib.import_module(f"g16dump.{mod.name}")
@@ -102,7 +100,7 @@ def check_package_imports() -> list[str]:
                 f"g16dump.{mod.name} does not import without pyscf/gauopen: {exc!r}"
             )
     if not problems:
-        print("every g16dump module except matfile imports with numpy alone")
+        print("every g16dump module imports with numpy alone")
     return problems
 
 

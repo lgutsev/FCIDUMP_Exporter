@@ -8,8 +8,9 @@ ever transforming integrals over the full MO space.
 
 Gaussian transforms the two-electron integrals over the active window only. The
 frozen core is folded analytically into an effective one-electron Hamiltonian
-`h'` and a scalar `E_core`. This takes seconds where a full-space dump takes
-days.
+`h'` and a scalar `E_core`. Measured on Fe porphine (269 basis functions,
+CAS(22,21), 8 cores): the windowed transformation takes 3.4 s, the whole Gaussian
+job 25 s. A full-space dump for comparison has not been timed.
 
 **Status: the pipeline is complete from the `.npz` bundle onward and tested;
 `extract` has not yet read a real `.mat`.** The bundle, the open-shell
@@ -94,19 +95,25 @@ h1e_act = me.MOEd[ncore:iact, ncore:iact]     # <- f assumed diagonal
 
 That holds for canonical RHF and for nothing else. It is false for ROHF, and
 false for Kohn–Sham orbitals (the KS matrix is not the HF Fock matrix). The
-symptom is visible in the shipped dumps: `legacy/FePorph_3_Window.dat` puts the
-triplet reference 0.67 Ha *below* the singlet in `legacy/FePorph_1_Window.dat`,
-which is impossible. The two files also differ in `E_core` by 0.48 Ha, and 186
-of the 210 one-electron off-diagonals in each are exactly zero — the fingerprint
-of a `h'` whose only off-diagonal content comes from the J/K correction, because
-the Fock off-diagonals were never there. All three numbers are measured from the
-committed files by `tests/test_legacy_regression.py`.
+symptom is visible in the shipped dumps: 186 of the 210 one-electron
+off-diagonals in each of `legacy/FePorph_1_Window.dat` and
+`legacy/FePorph_3_Window.dat` are exactly zero — the fingerprint of a `h'` whose
+only off-diagonal content comes from the J/K correction, because the Fock
+off-diagonals were never there — and the two files differ in `E_core` by 0.48
+Ha for what is meant to be the same active space. The triplet reference also
+sits 0.67 Ha below the singlet. The sign of that is not itself a bug: real G16
+SCF on a model Fe(II) porphine puts the ROHF triplet 0.057 Ha below the RHF
+singlet, as Hartree–Fock tends to for high spin on a transition metal (see
+[`gaussian/README.md`](gaussian/README.md)). The legacy gap is twelve times that,
+though with an unknown geometry and basis it is suggestive rather than a direct
+comparison. All three numbers are measured from the committed files by
+`tests/test_legacy_regression.py`.
 
-Those two jobs were almost certainly **UHF**, not RHF or ROHF: the legacy writer
-reads `AA`, `BA` and `BB MO 2E INTEGRALS`, and three blocks is the unrestricted
-form — a restricted job writes only `AA`. `legacy/Template.py` calls `scf.UHF`
-as well. That makes the original approach stranger still, since a spin-restricted
-FCIDUMP assumes one set of spatial orbitals and UHF has two.
+`legacy/Template.py` calls `scf.UHF`, so those two jobs may well have been UHF,
+which would make the original approach stranger still: a spin-restricted FCIDUMP
+assumes one set of spatial orbitals and UHF has two. (That the legacy writer
+reads `AA`, `BA` and `BB MO 2E INTEGRALS` is no evidence of UHF: the real G16
+probes show ROHF writes all three blocks too.)
 
 `legacy/FCIDUMP_Write_MOe_3.py` is separately inconsistent with itself: it builds
 $`E_{\text{core}}`$ from both the $`\alpha`$ and $`\beta`$ one-electron blocks, then
@@ -277,7 +284,7 @@ traceback. MOKIT is not installable from PyPI.
 
 ## The bundle
 
-`matfile.py` runs where gauopen lives and emits one `.npz`; everything
+`matfile.py` reads the `.mat` with numpy alone and emits one `.npz`; everything
 downstream reads only that. The schema is version `2`, and its keys are the
 ones the project plan names:
 
@@ -475,15 +482,14 @@ quantities.
 - Correctness is verified against an independent code, never assumed.
 - Plain modules and plain functions. No class hierarchies, no plugin systems.
 - Core runtime dependency is `numpy` only. `pyscf` and `mokit` are
-  validation/fallback dependencies. `gauopen` is needed only by the reader.
-- gauopen is never vendored — it is depended on, and its installation
-  documented.
+  validation/fallback dependencies. Gaussian's `gauopen` is not needed: the
+  `.mat` format is read directly (see `g16dump/matfile.py` for the layout).
 - No hardcoded paths. Everything comes from CLI arguments.
 
 ## Layout
 
 ```
-g16dump/      matfile.py   .mat -> .npz bundle (the only module importing QCMatEl)
+g16dump/      matfile.py   .mat -> .npz bundle (numpy reader of Gaussian's .mat)
               bundle.py    load/validate the .npz bundle, shape assertions
               hamiltonian.py   h', E_core, E_ref from Fock matrices
               fch.py       the .fch through MOKIT: Gaussian -> PySCF AO transfer
@@ -492,16 +498,16 @@ g16dump/      matfile.py   .mat -> .npz bundle (the only module importing QCMatE
               cli.py       inspect / extract / rebuild-fock / validate / dump / rotate
 gaussian/     route templates + how to run them
 legacy/       the original scripts, untouched, for reference and regression
-scripts/      inspect_mat.py, the matrix-element probe
+scripts/      inspect_mat.py, an optional gauopen-based cross-check of a .mat
 examples/     Dice input.dat and a Block2 DMRG script
 tests/        fixtures as committed .npz, no Gaussian and no gauopen needed
               make_fixtures.py regenerates them (needs pyscf; CI can do it)
+              data/g16_c01_probes: ten real G16 C.01 .mat/.fch pairs, gzipped
 ```
 
-The split exists because gauopen may not build everywhere and needs a compiled
-component. `matfile.py` runs on the cluster and emits a plain `.npz`; everything
-downstream reads only the `.npz`, and the tests run off committed `.npz`
-fixtures.
+`matfile.py` emits a plain `.npz`; everything downstream reads only the `.npz`.
+The reader itself is tested on the committed real Gaussian output
+(`tests/test_real_mat.py`), the rest on committed `.npz` fixtures.
 
 ## Installation
 
@@ -512,20 +518,13 @@ pip install -e ".[test]"          # + pytest
 pip install -e ".[dev]"           # + pyscf, pytest, ruff
 ```
 
-Neither `gauopen` nor `mokit` is on PyPI, so neither can appear in an extra.
+`g16dump extract` and `g16dump inspect` need numpy only; on a cluster where the
+package is not installed, `PYTHONPATH=/path/to/repo python3 -m g16dump inspect
+JOB.mat` works. Gaussian's `gauopen` is not used (it is not installed on LONI
+QB4, and building it needs f2py and Fortran). `scripts/inspect_mat.py` still
+accepts it as an optional cross-check.
 
-`gauopen` is **not** vendored here either. Get it from Gaussian, Inc. (it ships
-with the Gaussian distribution as the `gauopen` directory), build its compiled
-component, and put it on `PYTHONPATH`:
-
-```bash
-export PYTHONPATH=/path/to/gauopen:$PYTHONPATH
-python3 -c "import QCMatEl; print(QCMatEl.__file__)"
-```
-
-Only `g16dump extract` (i.e. `matfile.py`) needs it.
-
-`mokit` comes from its conda channel or a source build, and only
+`mokit` is not on PyPI, so it cannot appear in an extra. It comes from its conda channel or a source build, and only
 `g16dump rebuild-fock` (the rebuilt-Fock path from a `.fch`) uses it:
 
 ```bash
@@ -544,7 +543,7 @@ needs any of these.
 
 | Milestone | What it delivers | State |
 |---|---|---|
-| M0 | legacy inventory, `.mat` probe, route templates | probe and templates written; **waiting on cluster output** |
+| M0 | legacy inventory, `.mat` probe, route templates | cheap probe set **run on LONI** (G16 C.01, job 1072685) and read with the numpy reader: RHF passes end to end; **ROHF is blocked** by Gaussian's semicanonical transformation, see below |
 | M1 | test systems + two independent oracles | seven `.npz` fixtures committed: H2O RHF, CH2 triplet ROHF, the same CH2 with a Roothaan operator to be rejected, a rotated CH2, NH triplet ROHF, a real B3LYP set, and one with frozen virtuals. `h'` and `E_core` are checked against a full AO&rarr;MO transform written with explicit loops that imports nothing from `g16dump` |
 | M2 | `bundle.py`, `hamiltonian.py` + gates | done, with the schema, electron-count, window, Hermiticity, orthonormality, ERI-symmetry and α/β gates |
 | M3 | writer and solver interface | done; read back by an independent parser and by PySCF, reference energy reproduced to 1e-9 Ha. The Dice and Block2 examples were **both run against the real solvers**: Dice, built from source at `f0f0850`, and Block2 each reproduce an independent PySCF FCI on the CH2 and H2O dumps to the last digit any of them prints |
@@ -552,24 +551,17 @@ needs any of these.
 | M5 | benchmarks | preserved on `claude/benchmarks-and-sweeps`, deliberately not a release blocker |
 | M6 | packaging, CI, DOI | CI, packaging, LICENSE and usage examples done; `CITATION.cff` awaits attribution, DOI still open |
 
-What M0 still gates is `extract`, and the Gaussian → MOKIT → PySCF route on
-real output. The rebuilt-Fock conversion is tested here with MOKIT 1.2.9rc1 on
-Gaussian-convention data generated from PySCF (pure and Cartesian d and f, SP
-shells, RHF, ROHF and KS), and its conventions were checked against real
-Gaussian `.fch` files, but no real `.mat`/`.fch` pair has been through it yet;
-`tests/test_gaussian_outputs.py` is that gate, run as described in
-[`gaussian/README.md`](gaussian/README.md). Everything downstream of the bundle is
-exercised by the committed fixtures, so the labels in `g16dump.matfile.LABELS`
-are the only thing waiting on a real `.mat`. Fourteen probe jobs and a runner
-that executes them in one command are in [`gaussian/`](gaussian/), with the
-procedure for reading their result in
-[`gaussian/README.md`](gaussian/README.md); both of the likely outcomes -- real
-`f^α`/`f^β`, or the Roothaan operator -- are already handled, which is why the
-writer and the rotations did not wait on it.
-
-Open questions blocking M0's gate are listed in
-[`gaussian/README.md`](gaussian/README.md) and in the probe script's output
-section.
+The M0 answers, from ten real `.mat` files committed in
+`tests/data/g16_c01_probes/` and asserted in `tests/test_real_mat.py`, are in
+[`gaussian/README.md`](gaussian/README.md#m0-outcome). In short: `ITran=5`,
+`Window=` restricts the transformation, and RHF closes -- `E_ref` reproduces
+Gaussian's SCF energy to 1e-11 Ha and the active integrals match PySCF element
+by element. ROHF stores genuine `F^α`/`F^β`, but Gaussian transforms ROHF
+integrals over per-spin **semicanonical** orbitals whose active space has mixed
+with the frozen core, so `extract` refuses ROHF windowed jobs until a route that
+avoids this is found. The Gaussian → MOKIT → PySCF gate
+(`tests/test_gaussian_outputs.py`, needs MOKIT and PySCF) has still not been run
+on the real pairs.
 
 **Development rule while M0 is open:** do not expand scope. Treat the current
 implementation as the v1 candidate and let the real Gaussian smoke tests decide

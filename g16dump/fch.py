@@ -499,12 +499,85 @@ def with_rebuilt_fock_from_fch(bundle, fch, **tolerances):
     return rebuilt, conversion
 
 
+def active_integrals(conversion: AOConversion, mo_coeff: np.ndarray, active: slice) -> np.ndarray:
+    """``(tu|vw)`` over the active orbitals, transformed by PySCF.
+
+    ``mo_coeff`` is in the bundle's (Gaussian) AO basis; it is carried into the
+    ``Mole``'s basis by ``conversion`` and only its active columns are
+    transformed. Chemists' order, ``eri[t, u, v, w] = (tu|vw)``, as everywhere
+    in a bundle. ``ao2mo`` works from the AO integrals out of core, so the full
+    AO tensor is never held in memory.
+    """
+    from pyscf import ao2mo
+
+    mo = conversion.mo_coeff_pyscf(np.asarray(mo_coeff, dtype=np.float64))[:, active]
+    n = mo.shape[1]
+    eri = ao2mo.kernel(conversion.mol, mo, compact=False)
+    return np.ascontiguousarray(np.asarray(eri, dtype=np.float64).reshape(n, n, n, n))
+
+
+def with_pyscf_integrals(bundle, fch=None, *, conversion: AOConversion | None = None,
+                         **tolerances):
+    """``bundle`` with its active integrals and Fock matrices built by PySCF.
+
+    The route for ROHF: Gaussian transforms ROHF integrals over per-spin
+    semicanonical orbitals, never the ROHF ones, and no overlay-8 switch changes
+    that in G16 C.01 (gaussian/README.md, "The ROHF route"). Here the orbitals
+    and the overlap stay the ``.mat``'s; the core Hamiltonian, ``(tu|vw)`` and
+    ``F^sigma = Hcore + J[Pa+Pb] - K[Psigma]`` are all built by PySCF over those
+    orbitals, so the whole Hamiltonian comes from one integral code. Gaussian
+    and PySCF carry basis sets to different digits, and mixing their matrices
+    costs about 1e-6 Ha in E_ref -- enough to trip the gates.
+
+    ``conversion`` defaults to :func:`gaussian_to_pyscf` on ``fch``, which reads
+    the ``.fch`` through MOKIT and verifies the AO map. Returns the new bundle
+    and the conversion used.
+    """
+    from dataclasses import replace
+
+    from .hamiltonian import with_rebuilt_fock
+
+    if conversion is None:
+        if fch is None:
+            raise FchError("PySCF integrals need the job's .fch, or an AOConversion")
+        conversion = gaussian_to_pyscf(bundle, fch, **tolerances)
+    from pyscf import scf
+
+    eri = active_integrals(conversion, bundle.C, bundle.active)
+    # The core Hamiltonian is PySCF's as well. Gaussian and PySCF carry basis
+    # sets to different digits (~5e-8 relative in Hcore), and Gaussian's Hcore
+    # under PySCF's J and K puts E_ref ~2e-6 Ha off on CH2 (measured in CI).
+    # One integral code for the whole Hamiltonian; the orbitals and the overlap
+    # stay the .mat's.
+    transform = conversion.transform
+    hcore = transform.T @ np.asarray(scf.hf.get_hcore(conversion.mol)) @ transform
+
+    provenance = dict(bundle.provenance)
+    provenance["eri_source"] = "pyscf"
+    provenance["eri_build"] = {
+        "method": "pyscf ao2mo over the .mat orbitals carried into the Mole's AO basis",
+        "replaced_eri_source": bundle.provenance.get("eri_source", "gaussian"),
+        "hcore": "pyscf, carried into the .mat AO basis",
+        "hcore_vs_mat_max_abs": float(np.max(np.abs(hcore - bundle.Hcore_ao))),
+    }
+    with_eri = replace(bundle, eri_active=eri, Hcore_ao=hcore, provenance=provenance)
+    try:
+        record = conversion.provenance()
+    except Exception as exc:  # noqa: BLE001 - provenance must not mask a result
+        record = {"transform": conversion.kind, "provenance_error": repr(exc)}
+    rebuilt = with_rebuilt_fock(
+        with_eri, conversion.mol, ao_transform=conversion.transform, conversion=record
+    )
+    return rebuilt, conversion
+
+
 __all__ = [
     "AO_HCORE_RTOL",
     "AO_OVERLAP_TOL",
     "AOConversion",
     "FchError",
     "ORBITAL_TOL",
+    "active_integrals",
     "ao_transform_from_fch",
     "describe_transform",
     "fch_mo_coeff",
@@ -515,5 +588,6 @@ __all__ = [
     "read_fch_array",
     "read_fch_scalar",
     "require_mokit",
+    "with_pyscf_integrals",
     "with_rebuilt_fock_from_fch",
 ]

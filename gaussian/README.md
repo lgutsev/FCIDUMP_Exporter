@@ -1,9 +1,112 @@
 # Gaussian route templates
 
-These produce the `.mat` file that `g16dump extract` reads. **The route has not
-yet been run**, so it is still the M0 gate — but it was corrected against the
-Gaussian 16 documentation after the first draft, and one of those corrections
-was load-bearing:
+These produce the `.mat` file that `g16dump extract` reads. The route below
+**has been run**: the ten cheap probes ran on LONI QB4 under G16 C.01 (job
+1072685, 2026-10-06, all Normal termination), and their `.mat`/`.fch` pairs are
+committed gzipped in `tests/data/g16_c01_probes/`. What they showed is in the
+next section and is asserted by `tests/test_real_mat.py`.
+
+## M0 outcome
+
+Read with g16dump's own numpy reader (`g16dump/matfile.py`; gauopen is not
+installed on QB4 and is no longer needed anywhere).
+
+| Question | Answer | Evidence |
+|---|---|---|
+| Is `ITran` 5? | **Yes**, in all ten files. | Header record 8 holds `NFC, NFV, ITran, IDum9`. |
+| Is a Fock matrix written for RHF? | **Yes**, `ALPHA FOCK MATRIX`. | Diagonal in the MOs to 1e-14; matches PySCF's AO Fock to 2e-7; `E_ref` equals Gaussian's SCF energy to 2.5e-12 (H2O) and 5e-11 (frozen virtuals); `E_core` matches the PySCF numbers below to 3e-8. |
+| Does `Window=` restrict the transformation? | **Yes.** | `NFV` = 3, 11 and 7 for `Window=(2,10)` of 13, `(2,13)` of 24, `(2,12)` of 19, and the 2e block is exactly `nact^4` each time. **But `probe_h2o_nowindow` proves nothing:** without `Window=` Gaussian applies its default frozen core, so it came back identical to `probe_h2o_rhf` (NFC=1, 6 orbitals), not with 7. |
+| ROHF: real `F^α`/`F^β` or the Roothaan operator? | **Real `F^α` and `F^β`**, both written. | They match PySCF's `F^σ = h + J[Pα+Pβ] − K[Pσ]` to 3e-7 of scale, differ from each other by 0.66, and satisfy the ROHF stationarity conditions (`Fα+Fβ` docc–virt, `Fβ` docc–socc, `Fα` socc–virt) to 1e-11. |
+| ROHF: are the integrals over the ROHF orbitals? | **No. This blocks ROHF.** | `TRANS MO COEFFICIENTS` (the orbitals the transformation used) are per-spin **semicanonical**: each diagonalizes its own `F^σ` within the whole occupied and the whole virtual space, frozen orbitals included. `AA`, `BA`, `BB` are over three different orbital sets, none of them the ROHF one, and their active span has mixed with the frozen orbitals (overlap defect 5e-6 to 4.5e-3). No rotation recovers integrals over the ROHF orbitals, so `extract` refuses these files; the α/β gate fails them by 0.1–0.4 Ha for the same reason. |
+| A restricted job writes only `AA MO 2E INTEGRALS`? | **No.** ROHF writes `AA`, `BA`, `BB` and `BETA MO COEFFICIENTS` (equal to alpha). RHF and RKS write `AA` only. | `BA` is `(ββ|αα)`, packed `(-n, n, -n, n)`. |
+| Is an RKS `.mat` label-identical to an RHF one? | **Yes.** The KS matrix is `ALPHA FOCK MATRIX`. | Diagonal in the KS orbitals; `--reference RKS` remains the only way to know. |
+| Is UHF detectable from the `.mat` alone? | **Yes**: `BETA MO COEFFICIENTS` differs from alpha. Not from the header: `IOpCl=1, ICGU=112` for ROHF and UHF alike. | `extract` and `inspect` refuse it. |
+
+Format facts the reader relies on, true of all ten files: Fortran sequential
+unformatted, little-endian, 4-byte record markers; 11 header records; each
+object a 144-byte header (64-char label + `NI, NR, NTot, LenBuf, N1..N5, ASym`)
+and `ceil(NTot/LenBuf)` data records, each padded to `LenBuf`; a negative
+dimension packs that index with the next as a row-wise lower triangle;
+two-electron integrals in chemists' order with 8-fold `(-n,-n,-n,n)` packing
+(checked against PySCF element by element); `GAUSSIAN SCALARS` is sparse
+(index, value) pairs, with slots 1 virial ratio, 32 total energy, 41 nuclear
+repulsion, 43 SCF energy and 44 S² identified against the `.fch`.
+
+**What is unblocked.** RHF windowed jobs work end to end, so the porphine
+**singlets** can run. The porphine **triplets** (ROHF) will produce exactly the
+semicanonical integrals above and be refused. Running them is useful only to
+measure timing, until a route that keeps the ROHF orbitals through the
+transformation is found -- see "The ROHF route" below.
+
+### The ROHF route
+
+Gaussian documents two overlay-8 switches for exactly this (Overlay 8 page,
+gaussian.com/overlay8):
+
+| IOp | Documented meaning |
+|---|---|
+| `IOp(8/5)` | "Whether to pseudo-canonicalize ROHF orbitals": 0 default (yes if ROHF), 1 no, -1 yes, -2 yes and save over the canonical MOs. |
+| `IOp(8/40)` | "Handling of ROHF window": 0 default (documented as 2), 1 ROMP2 approach -- pseudo-canonical alpha and beta orbitals and a UHF transformation, 2 treat as RHF, transforming only the alpha orbitals. |
+
+The M0 ROHF probes set neither (their overlay-8 line is
+`8/6=5,9=40000,10=91,11=11,37=2,38=13/1,4`) and L804 reported an "Open-shell
+transformation" with two passes -- the pseudo-canonical, UHF-style handling,
+although 8/40's documented default is 2. So the documentation alone does not
+settle what these switches do in C.01; `run_rohf_route.slurm` tests it, five
+ROHF probes in seconds on one core:
+
+| Job | Route addition | Answers |
+|---|---|---|
+| `probe_ch2_rohf_iop_both` | `IOp(8/5=1,8/40=2)` | Does the combination give integrals over the ROHF orbitals? |
+| `probe_ch2_rohf_iop_nopc` | `IOp(8/5=1)` | Is switching off the pseudo-canonicalization enough on its own? |
+| `probe_ch2_rohf_iop_rhfwin` | `IOp(8/40=2)` | Is the RHF-style window enough on its own? |
+| `probe_ch2_rohf_ccpvdz_iop_both` | `IOp(8/5=1,8/40=2)` | The same with 11 frozen virtuals, where mixing hit both ends. |
+| `probe_nh_rohf_iop_both` | `IOp(8/5=1,8/40=2)` | The same with degenerate pi SOMOs. |
+
+**Reading the result needs no new code.** `g16dump extract --reference ROHF`
+already compares `TRANS MO COEFFICIENTS` with the active ROHF orbitals: if it
+accepts a file, the integrals are over the ROHF orbitals. Then
+`g16dump validate --hamiltonian` must show `h'` alpha/beta agreement near 1e-12
+and `E_ref` equal to E(SCF). (`E_core` is not comparable with the PySCF table
+below for ROHF: the two programs canonicalize ROHF orbitals differently, which
+mixes the frozen core with the active doubly occupied orbitals and moves `E_core`
+-- by 8.5e-5 Ha on CH2 -- while leaving `E_ref` alone. Only RHF canonical orbitals
+are unique.) An IOp Gaussian rejects ends in
+"Error termination"; that is an answer too.
+
+**Result (LONI job 1108620, 2026-10-16, dispatch package 63): neither switch
+helps.**
+
+- `IOp(8/40=2)` alone (`probe_ch2_rohf_iop_rhfwin`) is accepted and changes
+  nothing: L804 still reports "Open-shell transformation", and every 2e block,
+  `TRANS MO COEFFICIENTS` and both Fock matrices are bit-identical to
+  `probe_ch2_rohf` without it. `extract` refuses it with the same 1.457
+  deviation.
+- Every job with `IOp(8/5=1)` (`iop_both`, `iop_nopc`, `ccpvdz_iop_both`,
+  `nh_iop_both`) completes the SCF and then dies inside L804 with "Operation on
+  file out of range ... Error termination in NtrErr": in C.01 the open-shell
+  transformation cannot run on ROHF orbitals that were not pseudo-canonicalized.
+
+So in G16 C.01 there is no overlay-8 switch that gives windowed integrals over
+the ROHF orbitals.
+
+**The route that works: PySCF integrals.** `g16dump extract --integrals pyscf
+--fch JOB.fch` keeps the orbitals and the overlap from the `.mat` and builds the
+core Hamiltonian, both Fock matrices and the active `(tu|vw)` with PySCF over
+those orbitals, through MOKIT's Gaussian -> PySCF AO map. The whole Hamiltonian
+comes from one integral code: with Gaussian's core Hamiltonian under PySCF's J
+and K, `E_ref` was 1-2e-6 Ha off, from the basis-set digits the two programs
+carry. `tests/test_pyscf_integrals.py` runs it on the real CH2 and NH ROHF files
+in CI (an s/p AO permutation stands in for MOKIT there): the alpha/beta gate
+closes, `E_ref` matches Gaussian's E(ROHF) to 3e-7, and `h'`, `E_core` and
+`E_ref` match a full-space PySCF transform in the same orbitals. On the RHF
+files the same route reproduces Gaussian's own active integrals. Running it
+needs PySCF and MOKIT wherever `extract` runs.
+
+RKS jobs extract fine and need `rebuild-fock`, which needs MOKIT and PySCF and
+has **still not been run** on these real pairs (`tests/test_gaussian_outputs.py`).
+
+## Why the route looks like this
 
 > `Output=MatrixElement` **alone does not write MO two-electron integrals.**
 > The separate `MO2ElectronIntegrals` option is required. Without it the job
@@ -42,7 +145,7 @@ record the numbers you pass here.
   file **and** puts the MO two-electron integrals in it. Both halves are
   required; see the note at the top. The filename is the last section of the
   input (after a blank line following the geometry). `MatrixElement` gives the
-  Fortran-unformatted form, which is what gauopen's `QCMatEl` reads — not
+  Fortran-unformatted form, which is what `g16dump/matfile.py` reads -- not
   `RawMatrixElement`.
 - `Tran=(Full,Force)` — `Full` selects the complete `(pq|rs)` set over the
   window rather than one of the partial sets aimed at MP/CC (`IJAB`, `IABC`,
@@ -62,10 +165,23 @@ record the numbers you pass here.
 
 ## Running
 
+Locally, or in an interactive session:
+
 ```bash
 g16 NAME.gjf          # produces NAME.log, NAME.chk, NAME.mat
 formchk NAME.chk NAME.fch
 ```
+
+On LONI, through Slurm (`job_template.slurm` does both, plus the probe):
+
+```bash
+cd gaussian
+sbatch --export=ALL,NAME=probe_ch2_rohf job_template.slurm
+```
+
+Submit from the directory holding the `.gjf`. Slurm copies the batch script to a
+spool area, so the scripts here locate everything through `$SLURM_SUBMIT_DIR`
+rather than `$0`.
 
 The `.fch` is required — MOKIT's `load_mol_from_fch` reads it for both M1
 validation routes and for the rebuilt-Fock fallback path.
@@ -92,12 +208,11 @@ order, and the reason each is plausible:
 4. Still no MO integrals with `MO2ElectronIntegrals` present → try, in order:
    `Tran=(Full,Force)` (already in these templates); then adding a post-SCF
    method such as `ROMP2` so the transformation is invoked by the method itself;
-   then `Output=(RawMatrixElement,MO2ElectronIntegrals)` in case the installed
-   gauopen expects the raw form rather than the Fortran-unformatted one.
+   nothing further: the Fortran-unformatted form is the one the reader knows.
 5. The `.mat` is written but empty or unreadable → check the filename section at
-   the end of the input is present and followed by a blank line, and check the
-   `JOB STATUS` scalar, which `inspect_mat.py` now probes: QCMatEl sets it to
-   1.0 only when the job completed.
+   the end of the input is present and followed by a blank line. The reader refuses
+   a truncated file (no `END` record, or a broken record marker) with a sentence
+   saying so.
 
 Whatever ends up working, paste the exact working route back into these
 templates and say so in the commit message.
@@ -105,11 +220,14 @@ templates and say so in the commit message.
 ## Probing what a `.mat` actually contains
 
 ```bash
-python3 ../scripts/inspect_mat.py NAME.mat --json NAME.probe.json
+PYTHONPATH=.. python3 -m g16dump inspect NAME.mat --json NAME.probe.json
 ```
 
-Run this on the cluster (it is the only place gauopen lives) and keep the JSON.
-It assumes no label names; it reports what is there.
+Numpy only, so it runs anywhere, the login node included. The JSON lists every
+object in the file with its stored dimensions, so it assumes nothing about label
+names. `bash probe_only.sh` does this for every `.mat` in the directory without
+rerunning Gaussian. (`../scripts/inspect_mat.py` is the older gauopen-based
+probe, kept as an optional cross-check where gauopen exists.)
 
 ## The M0 probe jobs
 
@@ -120,11 +238,17 @@ default set with:
 
 ```bash
 cd gaussian
-GAUOPEN_PATH=/path/to/gauopen ./run_probes.sh
+sbatch run_probes.slurm                  # LONI, Slurm
+bash run_probes.sh                       # or interactively, anywhere
 ```
 
-That runs each job, `formchk`s it, runs `inspect_mat.py` where gauopen is
-available, records the environment and tars the lot into one archive. It keeps
+`run_probes.slurm` loads `gaussian/g16-c01` and points `GAUSS_SCRDIR` at
+node-local scratch. One core covers the whole cheap set, which runs in minutes;
+the two-hour limit is headroom. The probe inputs ask for `%nprocshared=1` and at
+most `%mem=2GB`. There is no `--mem` anywhere: QB4's sbatch filter rejects it.
+
+That runs each job, `formchk`s it, probes the `.mat` with the numpy reader,
+records the environment and tars the lot into one archive. It keeps
 going after a failure, so one broken route does not cost the whole set. **Send
 back the archive; nothing else is needed.**
 
@@ -133,7 +257,7 @@ back the archive; nothing else is needed.**
 | `probe_h2_smoke` | **Run first.** Two basis functions, under a second. Is `ITran` 5? Is there an `ALPHA FOCK MATRIX` record at all? If this fails, nothing below is worth reading. |
 | `probe_ch2_uhf` | **Run second.** The only job that writes BETA blocks, so it is the reference for what a beta record looks like when one exists. Also: is UHF (out of scope) detectable from the `.mat` alone? |
 | `probe_h2o_rhf` | Does the route work for a closed shell, and does `Window=` produce a 6-orbital block? |
-| `probe_h2o_nowindow` | The control. Identical but with no `Window=`, so a 7-orbital block here against 6 above is the only direct proof the keyword restricts anything. |
+| `probe_h2o_nowindow` | Meant as the control, but Gaussian's default frozen core makes it identical to `probe_h2o_rhf`; the frozen-virtual jobs are the proof `Window=` works. |
 | `probe_ch2_rohf` | The Fock question, open shell. |
 | `probe_nh_rohf` | A second open shell, whose singly occupied orbitals are a degenerate pi pair. |
 | `probe_h2o_frozen_virtual` | The only job with frozen **virtuals** (`NFV=3`). No fixture and no other probe has ever exercised that path. |
@@ -151,7 +275,7 @@ A mismatch here is the first thing to notice, so check it before anything else.
 |---|---|---|---|---|---|---|---|
 | `probe_h2_smoke` | 2 | 2 | 0 | 0 | 1-2 | 2 | 16 |
 | `probe_h2o_rhf` | 7 | 10 | 1 | 0 | 2-7 | 6 | 1296 |
-| `probe_h2o_nowindow` | 7 | 10 | 0 | 0 | 1-7 | 7 | 2401 |
+| `probe_h2o_nowindow` | 7 | 10 | 1 (FC default) | 0 | 2-7 | 6 | 1296 (2401 was expected) |
 | `probe_ch2_rohf` | 13 | 8 | 1 | 0 | 2-13 | 12 | 20736 |
 | `probe_ch2_uhf` | 13 | 8 | 1 | 0 | 2-13 | 12 | 20736 x3 blocks |
 | `probe_nh_rohf` | 11 | 8 | 1 | 0 | 2-11 | 10 | 10000 |
@@ -172,11 +296,20 @@ functions, and it is the first job here that resembles what the method was built
 for. It is opt-in because it takes minutes to hours rather than seconds:
 
 ```bash
-PORPHINE=1 ./run_probes.sh
+PORPHINE=1 bash run_probes.sh
+sbatch --export=ALL,PORPHINE=1 --cpus-per-task=8 --time=12:00:00 run_probes.slurm
+
+# the two RHF singlets only, without the cheap set or the ROHF triplets:
+sbatch --export=ALL,PORPHINE=singlets --cpus-per-task=8 --time=12:00:00 run_probes.slurm
 ```
 
-Run it only after the cheap set has confirmed `ITran=5`. There is no sense
-spending a porphine SCF to discover the route was wrong.
+`sbatch` flags override the `#SBATCH` lines, and `--cpus-per-task` has to match
+the `%nprocshared=8` in the porphine inputs: Gaussian will not notice a mismatch,
+it will simply oversubscribe the allocation.
+
+The cheap set has confirmed `ITran=5`. **The triplets will not extract**: they
+are ROHF; see "M0 outcome" above. Run the singlets; run the triplets only to
+measure timing, or once an ROHF route exists.
 
 | Job | Metal | Reference | Window | Active space |
 |---|---|---|---|---|
@@ -203,11 +336,55 @@ unique integrals. Windowed to 21 it is about 24000. If this job finishes in
 minutes, the "seconds where a full-space dump takes days" claim in the top-level
 README stops being an assertion and becomes a measurement. Capture the wall time.
 
+**Measured: the singlets (LONI job 1079620, 2026-10-08, `run_porphine_singlets.slurm`, 8 cores).**
+
+| Job | NBasis | NFC / NFV | active | ITran | E(RHF) | cycles | wall / CPU |
+|---|---|---|---|---|---|---|---|
+| `probe_fe_porphine_singlet` | 269 | 82 / 166 | 21 (MOs 83–103) | 5 | −2244.01125002 | 19 | 25.3 s / 3 min 19.5 s |
+| `probe_ni_porphine_singlet` | 269 | 83 / 165 | 21 (MOs 84–104) | 5 | −2488.41241972 | 20 | 26.3 s / 3 min 28.5 s |
+
+Per Gaussian link (Fe; Ni within 0.1 s): SCF (l502) 20.2 s wall / 160 s CPU;
+the windowed transformation itself (l804, 21 orbitals, 26,796 unique integrals)
+**3.4 s wall / 27 s CPU**; everything else about 1 s. That is the measured half
+of the claim above. The other half -- how long a full-space transformation and
+dump takes -- has **not** been measured here: no full 269-orbital job was run
+(about 6.6x10^8 unique integrals, ~5 GB). Read with `g16dump extract
+--reference RHF`: 15 objects per file span several data records and read
+correctly; MO coefficients match the `.fch` to 4e-8 and densities to 5e-9;
+`TRANS MO COEFFICIENTS` equal the active orbitals exactly; `E_ref` reproduces
+E(RHF) to 9e-9 (Fe) and 2e-8 (Ni), with `E_core` −2199.45758103 and
+−2444.81541265. Each `.mat` is 7.8 MB; it is not committed. The output is on D:
+in `hpc_smoke_tests/22_g16dump_probes/gaussian/probe_results/probe_results_qbd405_20261008/`.
+
 **The comparison that matters.** Dump both spin states and compare their
-reference energies. The legacy dumps put the ROHF triplet **0.673 Ha below** the
-RHF singlet, which is impossible; `tests/test_legacy_regression.py` measures
-that from the committed files. A correct pipeline must put the triplet above the
-singlet. That is the fix, demonstrated on a real system instead of on CH2.
+reference energies. The legacy dumps put the triplet **0.673 Ha below** the
+singlet (`tests/test_legacy_regression.py`). This section used to call that
+impossible and demand the triplet come out above; the measurement below shows
+that was wrong. Since `E_ref` reproduces each job's SCF energy, a correct
+pipeline gives the triplet-singlet gap of the SCF itself, whatever its sign.
+
+**Measured: the triplets (LONI job 1115971, 2026-10-19, `run_porphine_triplets.slurm`, 8 cores).**
+
+| Job | E(ROHF) | cycles | wall | E(RHF) singlet | triplet − singlet |
+|---|---|---|---|---|---|
+| `probe_fe_porphine_triplet` | −2244.06802152 | 57 | 75.5 s | −2244.01125002 | **−0.0568 Ha** (−1.55 eV) |
+| `probe_ni_porphine_triplet` | −2488.45724674 | 41 | 60.2 s | −2488.41241972 | **−0.0448 Ha** (−1.22 eV) |
+
+Both converged with no `Guess=Read`. NFC 82 / 83, 21 active orbitals (12
+alpha, 10 beta active electrons), ITran 5, <S^2> = 2 exactly; the `.mat`
+orbitals match the `.fch` to 4e-8 and the ROHF stationarity conditions hold to
+1e-7. As expected for ROHF, `TRANS MO COEFFICIENTS` are semicanonical, so these
+files need `extract --integrals pyscf`; that has not yet been run on them (it
+needs PySCF and MOKIT).
+
+So at the SCF level the triplet lies **below** the singlet for both metals, by
+0.045-0.057 Ha. Hartree-Fock over-stabilizes high spin on transition metals,
+and Fe(II) porphine has a genuinely low-lying triplet; the ordering that matters
+physically comes from the correlated (SHCI/DMRG) energies, not the reference.
+The legacy gap is twelve times this one, but its geometry and basis are not
+known, so that is suggestive rather than a direct comparison. The `.gjf` comments
+of both triplet inputs still carry the old "must come out ABOVE" expectation;
+they were left as they ran.
 
 If the ROHF triplet is slow to converge, run the singlet first and add
 `Guess=Read` -- the `.chk` is right there.
@@ -260,6 +437,12 @@ mistake this fixture exists to prevent.
 
 ## Step 2: getting the verdict on the Fock matrices
 
+> **Verdict (job 1072685):** neither of the outcomes below that this section
+> expected for ROHF. Gaussian stores genuine `F^α`/`F^β`, but `extract` now
+> refuses ROHF before `validate` is reached, because the ROHF integrals are over
+> semicanonical orbitals. See "M0 outcome" at the top. The text below is kept as
+> written before the run.
+
 The probe says which labels exist. It does not say whether the matrices behind
 them are the ones the algebra needs, and that is the question M0 actually has to
 answer: **does Gaussian store `F^α`/`F^β`, or only its Roothaan effective ROHF
@@ -291,8 +474,9 @@ are exactly three outcomes, and all three are useful:
 Only the last outcome requires a code change. The first three are all handled,
 which is why the writer and the rotations did not wait on this gate.
 
-Two predictions worth recording before the run, so that confirming or refuting
-them is itself informative:
+Two predictions recorded before the run. The first was **refuted** (ROHF also
+writes `AA`, `BA` and `BB`, so the legacy three-block script is not evidence of
+a UHF job after all); the second was **confirmed**:
 
 - **A restricted job writes only `AA MO 2E INTEGRALS`.** The three-block form
   (`AA`, `BA`, `BB`) is documented as unrestricted-only. Since
@@ -341,11 +525,11 @@ g16dump dump probe_ch2_rohf.npz --out probe_ch2_rohf.FCIDUMP --dice-nocc
 
 Every probe that writes a `.fch` can also go through the rebuilt-Fock path, and
 that path is where Gaussian's AO conventions meet PySCF's. On the machine that
-has gauopen and MOKIT, with the unpacked archive:
+has MOKIT and PySCF, with the unpacked archive (or the committed probes,
+gunzipped):
 
 ```bash
 G16DUMP_GAUSSIAN_OUTPUTS=probe_results_<host>_<date> \
-PYTHONPATH=/path/to/gauopen:$PYTHONPATH \
 pytest -m gaussian tests/test_gaussian_outputs.py -rA -s
 ```
 

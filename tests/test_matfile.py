@@ -1,15 +1,15 @@
-"""The Gaussian matrix-element reader.
+"""The logic of :func:`g16dump.matfile.extract`, on a stand-in ``.mat``.
 
-gauopen is not installable in CI, so these tests drive :func:`g16dump.matfile.extract`
-against an in-process stand-in for a ``MatEl`` object, built from the committed
-``h2o_rhf`` fixture. The stand-in reproduces the awkward parts of the real
-thing: lower-triangular packing on the one-electron blocks, a flat ``nact**4``
-two-electron block, and MO coefficients stored in the orientation the reader
-must *not* assume.
+These tests drive ``extract`` against an in-process stand-in for a parsed
+``.mat`` (the ``MatEl``-shaped interface :class:`g16dump.matfile.MatFile`
+exposes), built from the committed ``h2o_rhf`` fixture, so each failure mode can
+be produced on demand: lower-triangular packing on the one-electron blocks, a
+flat ``nact**4`` two-electron block, and MO coefficients stored in the
+orientation the reader must *not* assume.
 
-The label names themselves remain unconfirmed against a real ``.mat``; that is
-the M0 gate. What is tested here is everything around them -- that a missing
-block is reported with the file's actual contents, that the coefficient
+The reader itself, the format and the labels are tested on real G16 output in
+``test_real_mat.py``. What is tested here is everything around them -- that a
+missing block is reported with the file's actual contents, that the coefficient
 convention is decided numerically, and that a window disagreeing with the
 integrals it is supposed to describe stops the run instead of being absorbed.
 """
@@ -317,18 +317,21 @@ def test_candidate_order_is_preference_order():
     assert M.find_label(keys, M.LABELS["hcore"]) == "CORE HAMILTONIAN ALPHA"
 
 
-def test_gauopen_absence_is_a_sentence_not_a_traceback(monkeypatch):
+def test_the_reader_needs_no_gauopen(monkeypatch):
     import builtins
+    from pathlib import Path
 
     real_import = builtins.__import__
 
-    def _no_qcmatel(name, *args, **kwargs):
-        if name == "QCMatEl":
-            raise ImportError("No module named 'QCMatEl'")
+    def _no_gauopen(name, *args, **kwargs):
+        if name in ("QCMatEl", "qcmatrixio"):
+            raise ImportError(f"No module named {name!r}")
         return real_import(name, *args, **kwargs)
 
-    monkeypatch.setattr(builtins, "__import__", _no_qcmatel)
-    with pytest.raises(M.MatFileError, match="PYTHONPATH"):
+    monkeypatch.setattr(builtins, "__import__", _no_gauopen)
+    probes = Path(__file__).resolve().parent / "data" / "g16_c01_probes"
+    assert M.read_matel(probes / "probe_h2_smoke.mat.gz").itran == 5
+    with pytest.raises(M.MatFileError, match="no such file"):
         M.read_matel("job.mat")
 
 

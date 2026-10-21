@@ -51,9 +51,9 @@ def _add_inspect(subparsers) -> None:
         description=(
             "Check a Gaussian matrix-element file for the blocks g16dump needs, "
             "report which labels they were found under, and cross-check their "
-            "dimensions against the header. For an exhaustive dump of "
-            "everything a .mat contains, assuming nothing about labels at all, "
-            "use scripts/inspect_mat.py instead."
+            "dimensions against the header. The --json report also lists every "
+            "object the file contains with its stored dimensions. Needs numpy "
+            "only."
         ),
     )
     parser.add_argument("matfile", help="the Gaussian .mat file")
@@ -80,6 +80,8 @@ def _run_inspect(args) -> int:
         f"  frozen {header['nfc']} core and {header['nfv']} virtual, so the "
         f"window is MOs {header['window_1based'][0]}-{header['window_1based'][1]}"
     )
+    if header.get("itran") is not None:
+        print(f"  ITran={header['itran']} (5 is the full transformation)")
     if "eri_nact" in report:
         print(f"  two-electron block spans {report['eri_nact']} orbitals")
 
@@ -114,16 +116,17 @@ def _run_inspect(args) -> int:
 def _add_extract(subparsers) -> None:
     parser = subparsers.add_parser(
         "extract",
-        help="read a Gaussian .mat into an .npz bundle (needs gauopen)",
+        help="read a Gaussian .mat into an .npz bundle",
         description="Read a Gaussian 16 matrix-element file into an .npz bundle.",
     )
     parser.add_argument("matfile", help="the Gaussian .mat file")
     parser.add_argument(
         "--fch",
         help=(
-            "the matching formatted checkpoint file. Recorded in provenance "
-            "only: nothing is rebuilt here. Pass it to 'g16dump rebuild-fock' "
-            "to rebuild the Fock matrices"
+            "the matching formatted checkpoint file. Without --integrals pyscf "
+            "it is recorded in provenance only: nothing is rebuilt here, and "
+            "'g16dump rebuild-fock' takes it to rebuild the Fock matrices. "
+            "--integrals pyscf requires it"
         ),
     )
     parser.add_argument("--out", required=True, help="path for the .npz bundle")
@@ -145,6 +148,19 @@ def _add_extract(subparsers) -> None:
             "of the two-electron block."
         ),
     )
+    parser.add_argument(
+        "--integrals",
+        choices=["gaussian", "pyscf"],
+        default="gaussian",
+        help=(
+            "where the active two-electron integrals come from. 'gaussian' (the "
+            "default, numpy only) reads them from the .mat. 'pyscf' builds them, "
+            "the Fock matrices and the core Hamiltonian with PySCF over the .mat "
+            "orbitals; it needs "
+            "--fch, PySCF and MOKIT, and it is the route for ROHF, whose Gaussian "
+            "integrals are over semicanonical orbitals"
+        ),
+    )
     parser.add_argument("--route", help="the Gaussian route line, for provenance")
     parser.add_argument("--basis", help="basis set name, for provenance")
     parser.add_argument("--method", help="method name, for provenance")
@@ -163,6 +179,7 @@ def _run_extract(args) -> int:
             route=args.route,
             basis=args.basis,
             method=args.method,
+            integrals=args.integrals,
         )
         out = save(bundle, args.out)
     except (MatFileError, BundleError) as exc:
@@ -171,6 +188,18 @@ def _run_extract(args) -> int:
 
     print(f"wrote {out}")
     print(bundle.describe())
+    if args.integrals == "pyscf":
+        hamiltonian = active_hamiltonian(bundle)
+        print(
+            f"\nHamiltonian (Hcore, Fock, active integrals) built by PySCF over the "
+            f".mat orbitals\n"
+            f"  h' alpha/beta agreement  {hamiltonian.spin_deviation:.3e}\n"
+            f"  E_core                   {hamiltonian.e_core:.10f} Ha\n"
+            f"  E_ref                    {hamiltonian.e_ref:.10f} Ha"
+        )
+        if bundle.escf is not None and not bundle.is_ks:
+            print(f"  E_ref - E(SCF)           {hamiltonian.e_ref - bundle.escf:.3e} Ha")
+        return 0
     if bundle.is_ks:
         print(f"\nnote: {KS_WARNING}")
         print(f"next: g16dump rebuild-fock {out} --fch JOB.fch --out REBUILT.npz")
