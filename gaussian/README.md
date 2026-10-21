@@ -357,10 +357,34 @@ E(RHF) to 9e-9 (Fe) and 2e-8 (Ni), with `E_core` −2199.45758103 and
 in `hpc_smoke_tests/22_g16dump_probes/gaussian/probe_results/probe_results_qbd405_20261008/`.
 
 **The comparison that matters.** Dump both spin states and compare their
-reference energies. The legacy dumps put the ROHF triplet **0.673 Ha below** the
-RHF singlet, which is impossible; `tests/test_legacy_regression.py` measures
-that from the committed files. A correct pipeline must put the triplet above the
-singlet. That is the fix, demonstrated on a real system instead of on CH2.
+reference energies. The legacy dumps put the triplet **0.673 Ha below** the
+singlet (`tests/test_legacy_regression.py`). This section used to call that
+impossible and demand the triplet come out above; the measurement below shows
+that was wrong. Since `E_ref` reproduces each job's SCF energy, a correct
+pipeline gives the triplet-singlet gap of the SCF itself, whatever its sign.
+
+**Measured: the triplets (LONI job 1115971, 2026-10-19, `run_porphine_triplets.slurm`, 8 cores).**
+
+| Job | E(ROHF) | cycles | wall | E(RHF) singlet | triplet − singlet |
+|---|---|---|---|---|---|
+| `probe_fe_porphine_triplet` | −2244.06802152 | 57 | 75.5 s | −2244.01125002 | **−0.0568 Ha** (−1.55 eV) |
+| `probe_ni_porphine_triplet` | −2488.45724674 | 41 | 60.2 s | −2488.41241972 | **−0.0448 Ha** (−1.22 eV) |
+
+Both converged with no `Guess=Read`. NFC 82 / 83, 21 active orbitals (12
+alpha, 10 beta active electrons), ITran 5, <S^2> = 2 exactly; the `.mat`
+orbitals match the `.fch` to 4e-8 and the ROHF stationarity conditions hold to
+1e-7. As expected for ROHF, `TRANS MO COEFFICIENTS` are semicanonical, so these
+files need `extract --integrals pyscf`; that has not yet been run on them (it
+needs PySCF and MOKIT).
+
+So at the SCF level the triplet lies **below** the singlet for both metals, by
+0.045-0.057 Ha. Hartree-Fock over-stabilizes high spin on transition metals,
+and Fe(II) porphine has a genuinely low-lying triplet; the ordering that matters
+physically comes from the correlated (SHCI/DMRG) energies, not the reference.
+The legacy gap is twelve times this one, but its geometry and basis are not
+known, so that is suggestive rather than a direct comparison. The `.gjf` comments
+of both triplet inputs still carry the old "must come out ABOVE" expectation;
+they were left as they ran.
 
 If the ROHF triplet is slow to converge, run the singlet first and add
 `Guess=Read` -- the `.chk` is right there.

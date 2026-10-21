@@ -95,19 +95,25 @@ h1e_act = me.MOEd[ncore:iact, ncore:iact]     # <- f assumed diagonal
 
 That holds for canonical RHF and for nothing else. It is false for ROHF, and
 false for Kohn–Sham orbitals (the KS matrix is not the HF Fock matrix). The
-symptom is visible in the shipped dumps: `legacy/FePorph_3_Window.dat` puts the
-triplet reference 0.67 Ha *below* the singlet in `legacy/FePorph_1_Window.dat`,
-which is impossible. The two files also differ in `E_core` by 0.48 Ha, and 186
-of the 210 one-electron off-diagonals in each are exactly zero — the fingerprint
-of a `h'` whose only off-diagonal content comes from the J/K correction, because
-the Fock off-diagonals were never there. All three numbers are measured from the
-committed files by `tests/test_legacy_regression.py`.
+symptom is visible in the shipped dumps: 186 of the 210 one-electron
+off-diagonals in each of `legacy/FePorph_1_Window.dat` and
+`legacy/FePorph_3_Window.dat` are exactly zero — the fingerprint of a `h'` whose
+only off-diagonal content comes from the J/K correction, because the Fock
+off-diagonals were never there — and the two files differ in `E_core` by 0.48
+Ha for what is meant to be the same active space. The triplet reference also
+sits 0.67 Ha below the singlet. The sign of that is not itself a bug: real G16
+SCF on a model Fe(II) porphine puts the ROHF triplet 0.057 Ha below the RHF
+singlet, as Hartree–Fock tends to for high spin on a transition metal (see
+[`gaussian/README.md`](gaussian/README.md)). The legacy gap is twelve times that,
+though with an unknown geometry and basis it is suggestive rather than a direct
+comparison. All three numbers are measured from the committed files by
+`tests/test_legacy_regression.py`.
 
-Those two jobs were almost certainly **UHF**, not RHF or ROHF: the legacy writer
-reads `AA`, `BA` and `BB MO 2E INTEGRALS`, and three blocks is the unrestricted
-form — a restricted job writes only `AA`. `legacy/Template.py` calls `scf.UHF`
-as well. That makes the original approach stranger still, since a spin-restricted
-FCIDUMP assumes one set of spatial orbitals and UHF has two.
+`legacy/Template.py` calls `scf.UHF`, so those two jobs may well have been UHF,
+which would make the original approach stranger still: a spin-restricted FCIDUMP
+assumes one set of spatial orbitals and UHF has two. (That the legacy writer
+reads `AA`, `BA` and `BB MO 2E INTEGRALS` is no evidence of UHF: the real G16
+probes show ROHF writes all three blocks too.)
 
 `legacy/FCIDUMP_Write_MOe_3.py` is separately inconsistent with itself: it builds
 $`E_{\text{core}}`$ from both the $`\alpha`$ and $`\beta`$ one-electron blocks, then

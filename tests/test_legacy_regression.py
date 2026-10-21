@@ -10,9 +10,12 @@ wrong for an open shell. These two files are the same molecule and the same
 CAS(22,21) active space in two spin states, so they can be compared directly,
 and the comparison is damning in a specific, quantifiable way:
 
-* The triplet reference lies **below** the singlet. A higher-spin
-  reference determinant cannot be 0.67 Ha lower; there is no physics that does
-  that, only a bug.
+* The triplet reference lies 0.67 Ha **below** the singlet. The sign alone is
+  not evidence: real G16 SCF on a model Fe(II) porphine (LONI job 1115971,
+  gaussian/README.md) puts the ROHF triplet 0.057 Ha below the RHF singlet,
+  as Hartree-Fock tends to for high spin on a transition metal. The size is:
+  twelve times that. The geometry and basis of the legacy jobs are not known,
+  so this is suggestive rather than a like-for-like comparison.
 * 186 of the 210 one-electron off-diagonal records in each file are exactly
   zero. That is the fingerprint of ``h'`` built from ``diag(orbital energies)``:
   the only off-diagonal content it can have comes from the J/K correction,
@@ -20,12 +23,12 @@ and the comparison is damning in a specific, quantifiable way:
 * The two files disagree about ``E_core`` by 0.48 Ha, for an active space that
   is supposed to be identical in both.
 
-A note on the reference type: these were most likely **UHF** jobs, not
-RHF/ROHF. ``legacy/FCIDUMP_Write_MOe_3.py`` reads ``AA``, ``BA`` and ``BB MO 2E
-INTEGRALS``, and three blocks is the unrestricted form -- a restricted job
-writes only ``AA`` -- and ``legacy/Template.py`` calls ``scf.UHF``. It does not
-change anything measured below, but it does mean the legacy pipeline was
-building a spin-restricted FCIDUMP out of two different orbital sets.
+A note on the reference type: ``legacy/Template.py`` calls ``scf.UHF``, so these
+may have been UHF jobs. That ``legacy/FCIDUMP_Write_MOe_3.py`` reads ``AA``,
+``BA`` and ``BB MO 2E INTEGRALS`` is no evidence either way: the real G16 probes
+show ROHF writes all three blocks too (gaussian/README.md, "M0 outcome"). Either
+way the legacy pipeline was building a spin-restricted FCIDUMP from integrals
+over more than one orbital set.
 
 Everything here is read with the independent parser in ``test_write.py``, so
 these are properties of the files rather than of any code that wrote them. No
@@ -63,19 +66,20 @@ def test_the_two_dumps_describe_the_same_active_space(dumps):
     assert len(singlet.records) == len(triplet.records)
 
 
-def test_the_legacy_triplet_is_impossibly_below_the_legacy_singlet(dumps):
-    """The headline failure, in Hartrees.
+def test_the_legacy_triplet_sits_far_below_the_legacy_singlet(dumps):
+    """The legacy gap, in Hartrees.
 
-    Not a tolerance check -- the point is the sign and the size. A triplet
-    reference determinant 0.67 Ha below the singlet of the same molecule in the
-    same active space is not a converged-differently artefact; it is 422
-    kcal/mol, and it is what discarding the Fock off-diagonals costs.
+    The size is the point, not the sign. Real ROHF and RHF on a model Fe(II)
+    porphine put the triplet 0.057 Ha below the singlet; the legacy pair has it
+    0.67 Ha (422 kcal/mol) below, twelve times more. Different geometry and
+    basis, so suggestive rather than conclusive on its own; the zero
+    off-diagonals and the E_core disagreement below are the direct evidence.
     """
     singlet, triplet = dumps
     gap = _reference_energy(triplet) - _reference_energy(singlet)
     assert gap < -0.5, (
-        f"the legacy triplet was expected to sit far below the legacy singlet, "
-        f"which is the bug this project exists to fix; the gap is {gap:+.4f} Ha"
+        f"the legacy triplet was measured 0.67 Ha below the legacy singlet; "
+        f"the gap is now {gap:+.4f} Ha, so the committed files have changed"
     )
     assert gap == pytest.approx(-0.6727, abs=5e-4)
 
